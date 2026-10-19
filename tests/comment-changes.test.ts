@@ -175,31 +175,40 @@ describe("searching Azure DevOps people", () => {
 
   const BRUNO = "33333333-3333-3333-3333-333333333333";
 
+  /** A reply, or "stall" for a request that answers only when it times out. */
+  type Answer = Response | (() => Response) | "stall";
+
   /** Answers the item, its comments and the identities search; records the search URLs. */
   function fakePeople(answers: {
-    item?: Response | (() => Response);
-    comments?: Response | (() => Response);
-    identities?: Response | (() => Response);
+    item?: Answer;
+    comments?: Answer;
+    identities?: Answer;
   }) {
     const searches: URL[] = [];
-    const reply = (answer: Response | (() => Response) | undefined, empty: unknown) =>
-      typeof answer === "function" ? answer() : (answer ?? json(empty));
+    const reply = (answer: Answer | undefined, empty: unknown, signal?: AbortSignal | null) =>
+      answer === "stall"
+        ? new Promise<Response>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(signal.reason));
+          })
+        : typeof answer === "function"
+          ? answer()
+          : (answer ?? json(empty));
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(String(input));
         if (url.pathname.endsWith("/_apis/identities")) {
           searches.push(url);
-          return reply(answers.identities, { value: [] });
+          return reply(answers.identities, { value: [] }, init?.signal);
         }
         if (url.pathname.endsWith("/4821/comments")) {
-          return reply(answers.comments, { comments: [] });
+          return reply(answers.comments, { comments: [] }, init?.signal);
         }
         if (url.pathname.endsWith("/_apis/wit/workitems/4821")) {
           return reply(answers.item, {
             id: 4821,
             fields: { "System.TeamProject": "Contoso Portal" },
-          });
+          }, init?.signal);
         }
         throw new Error(`Unexpected request: ${url}`);
       }),
@@ -279,6 +288,27 @@ describe("searching Azure DevOps people", () => {
     });
 
     expect(await search("côté")).toEqual([{ id: BRUNO, displayName: "Bruno Côté" }]);
+  });
+
+  it("keeps the item's fields' people when its comments fail", async () => {
+    fakePeople({ item: itemWithPeople, comments: () => json({ message: "Busy" }, 503) });
+
+    expect(await search("silva")).toEqual([{ id: ANA, displayName: "Ana Silva" }]);
+  });
+
+  it("answers with what it found when a request takes too long", async () => {
+    fakePeople({
+      item: itemWithPeople,
+      comments: "stall",
+      identities: "stall",
+    });
+
+    const result = await searchAzureItemPeople(
+      config(),
+      { sourceId: SOURCE_ID, query: "ana", limit: 8 },
+      20,
+    );
+    expect(result.people).toEqual([{ id: ANA, displayName: "Ana Silva" }]);
   });
 
   it("fails only when both searches fail", async () => {

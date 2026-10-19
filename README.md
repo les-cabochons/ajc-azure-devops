@@ -102,7 +102,9 @@ the item first: who it is assigned to, who created and last changed it, and
 who wrote its newest 100 comments. They match when each word of the query
 starts a word of their name or account, so a last name finds them. Then come
 the organization's active users from the identities service, matched as Azure
-DevOps decides. Either search may fail; only both failing fails.
+DevOps decides. Each request gets 4 seconds. Either search may fail or run out
+of time; only both failing fails, and a failed comments request still leaves
+the item's assignee, creator and last editor.
 
 On each sync, for the items the user settled, the plugin reads the newest 20
 comments and returns those posted since the settle as `commentFacts`: id,

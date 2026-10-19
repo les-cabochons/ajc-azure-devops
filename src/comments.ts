@@ -373,6 +373,9 @@ export function identitiesBaseUrl(organizationUrl: string) {
 const PEOPLE_FIELDS = ["System.AssignedTo", "System.CreatedBy", "System.ChangedBy"];
 /** How many of the item's newest comments name their authors as suggestions. */
 const PEOPLE_COMMENT_PAGE = 100;
+/** How long each request of a people search may take, so one stuck request
+ * doesn't hold back what the others found. */
+const PEOPLE_REQUEST_TIMEOUT_MS = 4_000;
 
 /** Lowercase words without accents, so "Zoé" matches "zoe". */
 function nameWords(text: string) {
@@ -395,10 +398,15 @@ function matchesQuery(identity: AzureIdentity, query: string[]) {
  * it, and who commented on it lately. They match any part of their name, so a
  * last name finds them too.
  */
-async function fetchItemPeople(config: AzureDevOpsConnectionInput, id: number) {
+async function fetchItemPeople(
+  config: AzureDevOpsConnectionInput,
+  id: number,
+  timeoutMs: number,
+) {
   const workItem = await requestAzureDevOps<AzureWorkItem>(
     config,
     `/_apis/wit/workitems/${id}?fields=System.TeamProject,${PEOPLE_FIELDS.join(",")}&api-version=7.1`,
+    { signal: AbortSignal.timeout(timeoutMs) },
   );
   const project = getProjectName(workItem);
   const people = PEOPLE_FIELDS.map((field) => workItem.fields?.[field] as AzureIdentity | undefined);
@@ -408,10 +416,12 @@ async function fetchItemPeople(config: AzureDevOpsConnectionInput, id: number) {
       order: "desc",
       "api-version": COMMENTS_API_VERSION,
     });
+    // The fields' people still count when the comments fail.
     const page = await requestAzureDevOps<AzureCommentList>(
       config,
       `/${encodeURIComponent(project)}/_apis/wit/workItems/${id}/comments?${params}`,
-    );
+      { signal: AbortSignal.timeout(timeoutMs) },
+    ).catch((): AzureCommentList => ({}));
     people.push(...(page.comments ?? []).map((comment) => comment.createdBy));
   }
   return people.filter(
@@ -424,7 +434,11 @@ async function fetchItemPeople(config: AzureDevOpsConnectionInput, id: number) {
  * The organization's users whose name starts like the query, without groups
  * or inactive accounts. Azure DevOps decides how much of a name matches.
  */
-async function searchOrganizationPeople(config: AzureDevOpsConnectionInput, query: string) {
+async function searchOrganizationPeople(
+  config: AzureDevOpsConnectionInput,
+  query: string,
+  timeoutMs: number,
+) {
   const url = new URL(`${identitiesBaseUrl(config.organizationUrl)}/_apis/identities`);
   url.searchParams.set("searchFilter", "General");
   url.searchParams.set("filterValue", query);
@@ -439,6 +453,7 @@ async function searchOrganizationPeople(config: AzureDevOpsConnectionInput, quer
         Authorization: createAuthHeader(config.personalAccessToken),
       },
       redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     throw new Error(
@@ -462,11 +477,14 @@ async function searchOrganizationPeople(config: AzureDevOpsConnectionInput, quer
  * People for the editor's @ suggestions. Azure DevOps has no list of people
  * allowed on one work item, so the people on the item come first, matched by
  * any part of their name, then the organization's users. Either search may
- * fail, such as when the token can't read identities; only both failing fails.
+ * fail or run out of time, such as when the token can't read identities;
+ * only both failing fails.
  */
 export async function searchAzureItemPeople(
   config: AzureDevOpsConnectionInput,
   request: BacklogSearchItemPeopleRequest,
+  /** Tests pass a shorter one. */
+  timeoutMs = PEOPLE_REQUEST_TIMEOUT_MS,
 ): Promise<BacklogSearchItemPeopleResult> {
   const id = requireWorkItemId(config, request.sourceId);
   const query = request.query.trim().replace(/\s+/g, " ");
@@ -474,8 +492,8 @@ export async function searchAzureItemPeople(
   if (queryWords.length === 0) return { people: [] };
 
   const [onItem, inOrganization] = await Promise.allSettled([
-    fetchItemPeople(config, id),
-    searchOrganizationPeople(config, query),
+    fetchItemPeople(config, id, timeoutMs),
+    searchOrganizationPeople(config, query, timeoutMs),
   ]);
   if (onItem.status === "rejected" && inOrganization.status === "rejected") {
     throw inOrganization.reason;
