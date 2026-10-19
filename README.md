@@ -104,8 +104,9 @@ no list of the people allowed on one work item, so it suggests, in order:
 2. The people active in its project: who the work items changed in the last
    180 days (up to 200) are assigned to, and who created and last changed
    them. This needs only Work Items (Read), so it reaches past the item even
-   when the token can't search identities. The list is kept for five minutes
-   per project.
+   when the token can't search identities. Ajour runs each call in a fresh
+   worker, so it is asked for on every search, at the same time as the item,
+   from the project named in the item's source id.
 3. The organization's active users from the identities service, matched as
    Azure DevOps decides. This needs Identity (Read).
 

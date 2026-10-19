@@ -3,7 +3,6 @@ import type { AzureDevOpsConnectionInput } from "../src/azure-devops.ts";
 import {
   deleteAzureItemComment,
   editAzureItemComment,
-  forgetProjectPeople,
   identitiesBaseUrl,
   searchAzureItemPeople,
   setAzureItemCommentReaction,
@@ -170,7 +169,6 @@ describe("changing Azure DevOps comments", () => {
 
 describe("searching Azure DevOps people", () => {
   afterEach(() => {
-    forgetProjectPeople();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -338,8 +336,11 @@ describe("searching Azure DevOps people", () => {
     expect(searches).toHaveLength(0);
   });
 
-  it("fails a bare @ when the item can't be read", async () => {
-    fakePeople({ item: () => json({ message: "No access" }, 401) });
+  it("fails a bare @ when neither the item nor its project can be read", async () => {
+    fakePeople({
+      item: () => json({ message: "No access" }, 401),
+      projectItems: () => json({ message: "No access" }, 401),
+    });
 
     await expect(search("")).rejects.toThrow("Azure DevOps request failed (401)");
   });
@@ -405,35 +406,28 @@ describe("searching Azure DevOps people", () => {
     });
   });
 
-  it("keeps a project's people for five minutes, and asks again after a failure", async () => {
-    let now = Date.parse("2026-10-19T10:00:00Z");
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    let failing = true;
-    const searches = fakePeople({
-      item: itemWithPeople,
-      projectItems: () =>
-        failing ? json({ message: "Busy" }, 503) : projectWithCarla(),
-      projectPeople: carlaAndAna,
-    });
+  it("asks for the project's people alongside the item, from the project in the source id", async () => {
+    // The item never answers in time, yet the project's people still come.
+    fakePeople({ item: "stall", projectItems: projectWithCarla, projectPeople: carlaAndAna });
 
-    expect(await search("carla")).toEqual([]);
-    failing = false;
-    expect(await search("carla")).toHaveLength(1);
-    now += 4 * 60_000;
-    expect(await search("carla")).toHaveLength(1);
-    expect(searches.projectQueries).toHaveLength(2);
-    now += 2 * 60_000;
-    await search("carla");
-    expect(searches.projectQueries).toHaveLength(3);
+    const result = await searchAzureItemPeople(
+      config(),
+      { sourceId: SOURCE_ID, query: "carla", limit: 8 },
+      20,
+    );
+    expect(result.people).toEqual([
+      { id: CARLA, displayName: "Carla Diaz", email: "carla@contoso.com" },
+    ]);
   });
 
-  it("fails only when both searches fail", async () => {
+  it("fails only when every search fails", async () => {
     fakePeople({
       item: () => json({ message: "No access" }, 401),
+      projectItems: () => json({ message: "No access" }, 401),
       identities: () => new Response("Unauthorized", { status: 401 }),
     });
 
-    await expect(search("ana")).rejects.toThrow("Azure DevOps request failed (401): people search");
+    await expect(search("ana")).rejects.toThrow("Azure DevOps request failed (401)");
   });
 
   it("finds the identities host for each kind of organization URL", () => {

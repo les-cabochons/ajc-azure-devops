@@ -418,30 +418,47 @@ function matchesQuery(identity: AzureIdentity, query: string[]) {
 async function fetchItemPeople(
   config: AzureDevOpsConnectionInput,
   id: number,
+  knownProject: string | undefined,
   timeoutMs: number,
 ): Promise<{ project: string | undefined; people: AzureIdentity[] }> {
+  const params = new URLSearchParams({
+    $top: String(PEOPLE_COMMENT_PAGE),
+    order: "desc",
+    "api-version": COMMENTS_API_VERSION,
+  });
+  // The fields' people still count when the comments fail.
+  const comments = (project: string) =>
+    requestAzureDevOps<AzureCommentList>(
+      config,
+      `/${encodeURIComponent(project)}/_apis/wit/workItems/${id}/comments?${params}`,
+      { signal: AbortSignal.timeout(timeoutMs) },
+    ).catch((): AzureCommentList => ({}));
+  const early = knownProject ? comments(knownProject) : undefined;
   const workItem = await requestAzureDevOps<AzureWorkItem>(
     config,
     `/_apis/wit/workitems/${id}?fields=System.TeamProject,${PEOPLE_FIELDS.join(",")}&api-version=7.1`,
     { signal: AbortSignal.timeout(timeoutMs) },
   );
-  const project = getProjectName(workItem);
-  const people = PEOPLE_FIELDS.map((field) => workItem.fields?.[field] as AzureIdentity | undefined);
-  if (project) {
-    const params = new URLSearchParams({
-      $top: String(PEOPLE_COMMENT_PAGE),
-      order: "desc",
-      "api-version": COMMENTS_API_VERSION,
-    });
-    // The fields' people still count when the comments fail.
-    const page = await requestAzureDevOps<AzureCommentList>(
-      config,
-      `/${encodeURIComponent(project)}/_apis/wit/workItems/${id}/comments?${params}`,
-      { signal: AbortSignal.timeout(timeoutMs) },
-    ).catch((): AzureCommentList => ({}));
-    people.push(...(page.comments ?? []).map((comment) => comment.createdBy));
-  }
+  const project = getProjectName(workItem) ?? knownProject;
+  const people: unknown[] = PEOPLE_FIELDS.map((field) => workItem.fields?.[field]);
+  const page = early ?? (project ? comments(project) : undefined);
+  if (page) people.push(...((await page).comments ?? []).map((comment) => comment.createdBy));
   return { project, people: people.filter(isIdentity) };
+}
+
+/**
+ * The project a source id names, as Ajour stores work items:
+ * `{organization}/{project}/_workitems/edit/{id}`.
+ */
+function projectOfSourceId(config: AzureDevOpsConnectionInput, sourceId: string) {
+  try {
+    const organizationPath = new URL(config.organizationUrl).pathname.replace(/\/+$/, "");
+    const path = new URL(sourceId).pathname.slice(organizationPath.length);
+    const match = /^\/([^/]+)\/_workitems\/edit\/\d+\/?$/.exec(path);
+    return match ? decodeURIComponent(match[1]!) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isIdentity(value: unknown): value is AzureIdentity {
@@ -451,63 +468,44 @@ function isIdentity(value: unknown): value is AzureIdentity {
 /** How far back, and over how many work items, the project's people come from. */
 const PROJECT_PEOPLE_DAYS = 180;
 const PROJECT_PEOPLE_ITEMS = 200;
-/** How long a project's people are kept between searches. */
-const PROJECT_PEOPLE_TTL_MS = 5 * 60_000;
-const projectPeople = new Map<string, { at: number; people: Promise<AzureIdentity[]> }>();
-
-/** Forgets the projects' people, as tests need between cases. */
-export function forgetProjectPeople() {
-  projectPeople.clear();
-}
-
 /**
  * The people active in a project: who the work items changed in the last
  * 180 days are assigned to, and who created and last changed them. It needs
  * only Work Items (Read), so it reaches past the item when the token can't
- * search the organization's identities. Kept for five minutes per project.
+ * search the organization's identities. Ajour runs each call in a fresh
+ * worker, so this is asked for on every search, at the same time as the
+ * item when the source id names the project.
  */
-function fetchProjectPeople(
+async function fetchProjectPeople(
   config: AzureDevOpsConnectionInput,
   project: string,
   timeoutMs: number,
-) {
-  const key = `${config.organizationUrl}
-${project}`;
-  const kept = projectPeople.get(key);
-  if (kept && Date.now() - kept.at < PROJECT_PEOPLE_TTL_MS) return kept.people;
-  const people = (async () => {
-    const found = await requestAzureDevOps<{ workItems?: { id: number }[] }>(
-      config,
-      `/${encodeURIComponent(project)}/_apis/wit/wiql?$top=${PROJECT_PEOPLE_ITEMS}&api-version=7.1`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          query: `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.ChangedDate] >= @today - ${PROJECT_PEOPLE_DAYS} ORDER BY [System.ChangedDate] DESC`,
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      },
-    );
-    const ids = (found.workItems ?? []).map((workItem) => workItem.id).slice(0, PROJECT_PEOPLE_ITEMS);
-    if (ids.length === 0) return [];
-    const batch = await requestAzureDevOps<{ value?: AzureWorkItem[] }>(
-      config,
-      "/_apis/wit/workitemsbatch?api-version=7.1",
-      {
-        method: "POST",
-        body: JSON.stringify({ ids, fields: PEOPLE_FIELDS }),
-        signal: AbortSignal.timeout(timeoutMs),
-      },
-    );
-    return (batch.value ?? []).flatMap((workItem) =>
-      PEOPLE_FIELDS.map((field) => workItem.fields?.[field]).filter(isIdentity),
-    );
-  })();
-  projectPeople.set(key, { at: Date.now(), people });
-  // A failure is not kept, so the next search asks again.
-  people.catch(() => {
-    if (projectPeople.get(key)?.people === people) projectPeople.delete(key);
-  });
-  return people;
+): Promise<AzureIdentity[]> {
+  const found = await requestAzureDevOps<{ workItems?: { id: number }[] }>(
+    config,
+    `/${encodeURIComponent(project)}/_apis/wit/wiql?$top=${PROJECT_PEOPLE_ITEMS}&api-version=7.1`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        query: `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.ChangedDate] >= @today - ${PROJECT_PEOPLE_DAYS} ORDER BY [System.ChangedDate] DESC`,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    },
+  );
+  const ids = (found.workItems ?? []).map((workItem) => workItem.id).slice(0, PROJECT_PEOPLE_ITEMS);
+  if (ids.length === 0) return [];
+  const batch = await requestAzureDevOps<{ value?: AzureWorkItem[] }>(
+    config,
+    "/_apis/wit/workitemsbatch?api-version=7.1",
+    {
+      method: "POST",
+      body: JSON.stringify({ ids, fields: PEOPLE_FIELDS }),
+      signal: AbortSignal.timeout(timeoutMs),
+    },
+  );
+  return (batch.value ?? []).flatMap((workItem) =>
+    PEOPLE_FIELDS.map((field) => workItem.fields?.[field]).filter(isIdentity),
+  );
 }
 
 /**
@@ -580,15 +578,19 @@ export async function searchAzureItemPeople(
   const queryWords = nameWords(query);
   if (query && queryWords.length === 0) return { people: [] };
 
-  const item = fetchItemPeople(config, id, timeoutMs);
+  const knownProject = projectOfSourceId(config, request.sourceId);
+  const item = fetchItemPeople(config, id, knownProject, timeoutMs);
   const [onItem, onProject, inOrganization] = await Promise.allSettled([
     item,
-    item.then(({ project }) => (project ? fetchProjectPeople(config, project, timeoutMs) : [])),
+    knownProject
+      ? fetchProjectPeople(config, knownProject, timeoutMs)
+      : item.then(({ project }) => (project ? fetchProjectPeople(config, project, timeoutMs) : [])),
     query ? searchOrganizationPeople(config, query, timeoutMs) : Promise.resolve([]),
   ]);
-  if (!query && onItem.status === "rejected") throw onItem.reason;
-  if (onItem.status === "rejected" && inOrganization.status === "rejected") {
-    throw inOrganization.reason;
+  const searches = query ? [onItem, onProject, inOrganization] : [onItem, onProject];
+  const failed = searches.find((search) => search.status === "rejected");
+  if (failed && searches.every((search) => search.status === "rejected")) {
+    throw failed.reason;
   }
   const matching = (people: AzureIdentity[]) =>
     people.filter((identity) => matchesQuery(identity, queryWords)).map(suggestion);
