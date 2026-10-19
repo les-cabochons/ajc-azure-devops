@@ -441,9 +441,15 @@ async function fetchItemPeople(
   );
   const project = getProjectName(workItem) ?? knownProject;
   const people: unknown[] = PEOPLE_FIELDS.map((field) => workItem.fields?.[field]);
-  const page = early ?? (project ? comments(project) : undefined);
+  // An item moved to another project keeps the old one in its source id.
+  const page =
+    early && sameProject(project, knownProject) ? early : project ? comments(project) : undefined;
   if (page) people.push(...((await page).comments ?? []).map((comment) => comment.createdBy));
   return { project, people: people.filter(isIdentity) };
+}
+
+function sameProject(one: string | undefined, other: string | undefined) {
+  return one !== undefined && other !== undefined && one.toLowerCase() === other.toLowerCase();
 }
 
 /**
@@ -580,11 +586,23 @@ export async function searchAzureItemPeople(
 
   const knownProject = projectOfSourceId(config, request.sourceId);
   const item = fetchItemPeople(config, id, knownProject, timeoutMs);
+  // The project's people are asked for at once, then again from the item's
+  // own project if it moved since the source id was made.
+  const projectPeople = async () => {
+    const early = knownProject ? fetchProjectPeople(config, knownProject, timeoutMs) : undefined;
+    early?.catch(() => undefined);
+    const project = await item.then(
+      (found) => found.project,
+      () => knownProject,
+    );
+    if (!project) return [];
+    return early && sameProject(project, knownProject)
+      ? early
+      : fetchProjectPeople(config, project, timeoutMs);
+  };
   const [onItem, onProject, inOrganization] = await Promise.allSettled([
     item,
-    knownProject
-      ? fetchProjectPeople(config, knownProject, timeoutMs)
-      : item.then(({ project }) => (project ? fetchProjectPeople(config, project, timeoutMs) : [])),
+    projectPeople(),
     query ? searchOrganizationPeople(config, query, timeoutMs) : Promise.resolve([]),
   ]);
   const searches = query ? [onItem, onProject, inOrganization] : [onItem, onProject];

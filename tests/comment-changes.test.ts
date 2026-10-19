@@ -176,7 +176,7 @@ describe("searching Azure DevOps people", () => {
   const BRUNO = "33333333-3333-3333-3333-333333333333";
 
   /** A reply, or "stall" for a request that answers only when it times out. */
-  type Answer = Response | (() => Response) | "stall";
+  type Answer = Response | ((project?: string) => Response) | "stall";
 
   /**
    * Answers the item, its comments, the project's recent work items and the
@@ -190,14 +190,20 @@ describe("searching Azure DevOps people", () => {
     projectPeople?: Answer;
   }) {
     const searches: URL[] = [];
-    const projectQueries: unknown[] = [];
-    const reply = (answer: Answer | undefined, empty: unknown, signal?: AbortSignal | null) =>
+    const projectQueries: Array<{ project: string; query: string }> = [];
+    const commentProjects: string[] = [];
+    const reply = (
+      answer: Answer | undefined,
+      empty: unknown,
+      signal?: AbortSignal | null,
+      project?: string,
+    ) =>
       answer === "stall"
         ? new Promise<Response>((_resolve, reject) => {
             signal?.addEventListener("abort", () => reject(signal.reason));
           })
         : typeof answer === "function"
-          ? answer()
+          ? answer(project)
           : (answer ?? json(empty));
     vi.stubGlobal(
       "fetch",
@@ -208,11 +214,14 @@ describe("searching Azure DevOps people", () => {
           return reply(answers.identities, { value: [] }, init?.signal);
         }
         if (url.pathname.endsWith("/4821/comments")) {
+          commentProjects.push(decodeURIComponent(url.pathname.split("/")[2]!));
           return reply(answers.comments, { comments: [] }, init?.signal);
         }
-        if (url.pathname.endsWith("/Contoso%20Portal/_apis/wit/wiql")) {
-          projectQueries.push(JSON.parse(String(init?.body)));
-          return reply(answers.projectItems, { workItems: [] }, init?.signal);
+        const wiql = /\/([^/]+)\/_apis\/wit\/wiql$/.exec(url.pathname);
+        if (wiql) {
+          const project = decodeURIComponent(wiql[1]!);
+          projectQueries.push({ project, ...JSON.parse(String(init?.body)) });
+          return reply(answers.projectItems, { workItems: [] }, init?.signal, project);
         }
         if (url.pathname.endsWith("/_apis/wit/workitemsbatch")) {
           return reply(answers.projectPeople, { value: [] }, init?.signal);
@@ -226,7 +235,7 @@ describe("searching Azure DevOps people", () => {
         throw new Error(`Unexpected request: ${url}`);
       }),
     );
-    return Object.assign(searches, { projectQueries });
+    return Object.assign(searches, { projectQueries, commentProjects });
   }
 
   const itemWithPeople = () =>
@@ -402,6 +411,7 @@ describe("searching Azure DevOps people", () => {
       { id: CARLA, displayName: "Carla Diaz", email: "carla@contoso.com" },
     ]);
     expect(searches.projectQueries[0]).toEqual({
+      project: "Contoso Portal",
       query: expect.stringContaining("[System.ChangedDate] >= @today - 180"),
     });
   });
@@ -418,6 +428,31 @@ describe("searching Azure DevOps people", () => {
     expect(result.people).toEqual([
       { id: CARLA, displayName: "Carla Diaz", email: "carla@contoso.com" },
     ]);
+  });
+
+  it("asks the project the item moved to, not only the one in its source id", async () => {
+    const searches = fakePeople({
+      item: () =>
+        json({
+          id: 4821,
+          fields: {
+            "System.TeamProject": "Contoso Mobile",
+            "System.AssignedTo": { id: ANA, displayName: "Ana Silva", uniqueName: "ana@contoso.com" },
+          },
+        }),
+      projectItems: (project) =>
+        project === "Contoso Mobile" ? projectWithCarla() : json({ workItems: [] }),
+      projectPeople: carlaAndAna,
+    });
+
+    expect(await search("carla")).toEqual([
+      { id: CARLA, displayName: "Carla Diaz", email: "carla@contoso.com" },
+    ]);
+    expect(searches.projectQueries.map((query) => query.project)).toEqual([
+      "Contoso Portal",
+      "Contoso Mobile",
+    ]);
+    expect(searches.commentProjects).toEqual(["Contoso Portal", "Contoso Mobile"]);
   });
 
   it("fails only when every search fails", async () => {
