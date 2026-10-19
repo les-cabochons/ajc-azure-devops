@@ -369,18 +369,62 @@ export function identitiesBaseUrl(organizationUrl: string) {
   return `${url.origin}${url.pathname}`;
 }
 
+/** The item's fields that name a person. */
+const PEOPLE_FIELDS = ["System.AssignedTo", "System.CreatedBy", "System.ChangedBy"];
+/** How many of the item's newest comments name their authors as suggestions. */
+const PEOPLE_COMMENT_PAGE = 100;
+
+/** Lowercase words without accents, so "Zoé" matches "zoe". */
+function nameWords(text: string) {
+  return text
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .split(/[\s.,;:()[\]<>@\/_-]+/)
+    .filter(Boolean);
+}
+
+/** Whether every word of the query starts a word of the person's name or account. */
+function matchesQuery(identity: AzureIdentity, query: string[]) {
+  const words = nameWords(`${identity.displayName ?? ""} ${identity.uniqueName ?? ""}`);
+  return query.every((part) => words.some((word) => word.startsWith(part)));
+}
+
 /**
- * People whose name starts like the query, for the editor's @ suggestions.
- * Azure DevOps has no list of people allowed on one work item, so this
- * searches the organization's users, without groups or inactive accounts.
+ * The people on the item: who it is assigned to, who created and last changed
+ * it, and who commented on it lately. They match any part of their name, so a
+ * last name finds them too.
  */
-export async function searchAzureItemPeople(
-  config: AzureDevOpsConnectionInput,
-  request: BacklogSearchItemPeopleRequest,
-): Promise<BacklogSearchItemPeopleResult> {
-  requireWorkItemId(config, request.sourceId);
-  const query = request.query.trim();
-  if (!query) return { people: [] };
+async function fetchItemPeople(config: AzureDevOpsConnectionInput, id: number) {
+  const workItem = await requestAzureDevOps<AzureWorkItem>(
+    config,
+    `/_apis/wit/workitems/${id}?fields=System.TeamProject,${PEOPLE_FIELDS.join(",")}&api-version=7.1`,
+  );
+  const project = getProjectName(workItem);
+  const people = PEOPLE_FIELDS.map((field) => workItem.fields?.[field] as AzureIdentity | undefined);
+  if (project) {
+    const params = new URLSearchParams({
+      $top: String(PEOPLE_COMMENT_PAGE),
+      order: "desc",
+      "api-version": COMMENTS_API_VERSION,
+    });
+    const page = await requestAzureDevOps<AzureCommentList>(
+      config,
+      `/${encodeURIComponent(project)}/_apis/wit/workItems/${id}/comments?${params}`,
+    );
+    people.push(...(page.comments ?? []).map((comment) => comment.createdBy));
+  }
+  return people.filter(
+    (identity): identity is AzureIdentity =>
+      typeof identity === "object" && identity !== null && Boolean(identity.id),
+  );
+}
+
+/**
+ * The organization's users whose name starts like the query, without groups
+ * or inactive accounts. Azure DevOps decides how much of a name matches.
+ */
+async function searchOrganizationPeople(config: AzureDevOpsConnectionInput, query: string) {
   const url = new URL(`${identitiesBaseUrl(config.organizationUrl)}/_apis/identities`);
   url.searchParams.set("searchFilter", "General");
   url.searchParams.set("filterValue", query);
@@ -405,15 +449,50 @@ export async function searchAzureItemPeople(
     throw new Error(`Azure DevOps request failed (${response.status}): people search`);
   }
   const data = (await response.json()) as { value?: AzureIdentity2[] };
-  const people = (data.value ?? [])
+  return (data.value ?? [])
     .filter((identity) => identity.id && identity.isActive !== false && !identity.isContainer)
     .map((identity) => ({
       id: identity.id!.toLowerCase(),
       displayName: (identity.customDisplayName || identity.providerDisplayName || "").trim(),
     }))
-    .filter((person) => person.displayName)
-    .slice(0, request.limit);
-  return { people };
+    .filter((person) => person.displayName);
+}
+
+/**
+ * People for the editor's @ suggestions. Azure DevOps has no list of people
+ * allowed on one work item, so the people on the item come first, matched by
+ * any part of their name, then the organization's users. Either search may
+ * fail, such as when the token can't read identities; only both failing fails.
+ */
+export async function searchAzureItemPeople(
+  config: AzureDevOpsConnectionInput,
+  request: BacklogSearchItemPeopleRequest,
+): Promise<BacklogSearchItemPeopleResult> {
+  const id = requireWorkItemId(config, request.sourceId);
+  const query = request.query.trim().replace(/\s+/g, " ");
+  const queryWords = nameWords(query);
+  if (queryWords.length === 0) return { people: [] };
+
+  const [onItem, inOrganization] = await Promise.allSettled([
+    fetchItemPeople(config, id),
+    searchOrganizationPeople(config, query),
+  ]);
+  if (onItem.status === "rejected" && inOrganization.status === "rejected") {
+    throw inOrganization.reason;
+  }
+  const found = [
+    ...(onItem.status === "fulfilled"
+      ? onItem.value.filter((identity) => matchesQuery(identity, queryWords)).map(person)
+      : []),
+    ...(inOrganization.status === "fulfilled" ? inOrganization.value : []),
+  ];
+  const seen = new Set<string>();
+  const people = found.filter((candidate) => {
+    if (seen.has(candidate.id)) return false;
+    seen.add(candidate.id);
+    return true;
+  });
+  return { people: people.slice(0, request.limit) };
 }
 
 /** How many of a settled item's newest comments a sync reads. */
