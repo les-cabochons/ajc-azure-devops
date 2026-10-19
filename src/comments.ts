@@ -419,7 +419,7 @@ async function fetchItemPeople(
   config: AzureDevOpsConnectionInput,
   id: number,
   timeoutMs: number,
-) {
+): Promise<{ project: string | undefined; people: AzureIdentity[] }> {
   const workItem = await requestAzureDevOps<AzureWorkItem>(
     config,
     `/_apis/wit/workitems/${id}?fields=System.TeamProject,${PEOPLE_FIELDS.join(",")}&api-version=7.1`,
@@ -441,10 +441,73 @@ async function fetchItemPeople(
     ).catch((): AzureCommentList => ({}));
     people.push(...(page.comments ?? []).map((comment) => comment.createdBy));
   }
-  return people.filter(
-    (identity): identity is AzureIdentity =>
-      typeof identity === "object" && identity !== null && Boolean(identity.id),
-  );
+  return { project, people: people.filter(isIdentity) };
+}
+
+function isIdentity(value: unknown): value is AzureIdentity {
+  return typeof value === "object" && value !== null && Boolean((value as AzureIdentity).id);
+}
+
+/** How far back, and over how many work items, the project's people come from. */
+const PROJECT_PEOPLE_DAYS = 180;
+const PROJECT_PEOPLE_ITEMS = 200;
+/** How long a project's people are kept between searches. */
+const PROJECT_PEOPLE_TTL_MS = 5 * 60_000;
+const projectPeople = new Map<string, { at: number; people: Promise<AzureIdentity[]> }>();
+
+/** Forgets the projects' people, as tests need between cases. */
+export function forgetProjectPeople() {
+  projectPeople.clear();
+}
+
+/**
+ * The people active in a project: who the work items changed in the last
+ * 180 days are assigned to, and who created and last changed them. It needs
+ * only Work Items (Read), so it reaches past the item when the token can't
+ * search the organization's identities. Kept for five minutes per project.
+ */
+function fetchProjectPeople(
+  config: AzureDevOpsConnectionInput,
+  project: string,
+  timeoutMs: number,
+) {
+  const key = `${config.organizationUrl}
+${project}`;
+  const kept = projectPeople.get(key);
+  if (kept && Date.now() - kept.at < PROJECT_PEOPLE_TTL_MS) return kept.people;
+  const people = (async () => {
+    const found = await requestAzureDevOps<{ workItems?: { id: number }[] }>(
+      config,
+      `/${encodeURIComponent(project)}/_apis/wit/wiql?$top=${PROJECT_PEOPLE_ITEMS}&api-version=7.1`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          query: `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.ChangedDate] >= @today - ${PROJECT_PEOPLE_DAYS} ORDER BY [System.ChangedDate] DESC`,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    );
+    const ids = (found.workItems ?? []).map((workItem) => workItem.id).slice(0, PROJECT_PEOPLE_ITEMS);
+    if (ids.length === 0) return [];
+    const batch = await requestAzureDevOps<{ value?: AzureWorkItem[] }>(
+      config,
+      "/_apis/wit/workitemsbatch?api-version=7.1",
+      {
+        method: "POST",
+        body: JSON.stringify({ ids, fields: PEOPLE_FIELDS }),
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    );
+    return (batch.value ?? []).flatMap((workItem) =>
+      PEOPLE_FIELDS.map((field) => workItem.fields?.[field]).filter(isIdentity),
+    );
+  })();
+  projectPeople.set(key, { at: Date.now(), people });
+  // A failure is not kept, so the next search asks again.
+  people.catch(() => {
+    if (projectPeople.get(key)?.people === people) projectPeople.delete(key);
+  });
+  return people;
 }
 
 /**
@@ -499,11 +562,12 @@ async function searchOrganizationPeople(
 
 /**
  * People for the editor's @ suggestions. Azure DevOps has no list of people
- * allowed on one work item, so the people on the item come first, matched by
- * any part of their name, then the organization's users. A bare @ asks with
- * no query and gets only the item's people. Either search may fail or run
- * out of time, such as when the token can't read identities; only both
- * failing fails.
+ * allowed on one work item, so the people on the item come first, then the
+ * people active in its project, both matched by any part of their name, then
+ * the organization's users. A bare @ asks with no query and gets the item's
+ * and the project's people, without searching the organization. A search
+ * may fail or run out of time, such as when the token can't read
+ * identities; only all of them failing fails.
  */
 export async function searchAzureItemPeople(
   config: AzureDevOpsConnectionInput,
@@ -516,18 +580,21 @@ export async function searchAzureItemPeople(
   const queryWords = nameWords(query);
   if (query && queryWords.length === 0) return { people: [] };
 
-  const [onItem, inOrganization] = await Promise.allSettled([
-    fetchItemPeople(config, id, timeoutMs),
+  const item = fetchItemPeople(config, id, timeoutMs);
+  const [onItem, onProject, inOrganization] = await Promise.allSettled([
+    item,
+    item.then(({ project }) => (project ? fetchProjectPeople(config, project, timeoutMs) : [])),
     query ? searchOrganizationPeople(config, query, timeoutMs) : Promise.resolve([]),
   ]);
   if (!query && onItem.status === "rejected") throw onItem.reason;
   if (onItem.status === "rejected" && inOrganization.status === "rejected") {
     throw inOrganization.reason;
   }
+  const matching = (people: AzureIdentity[]) =>
+    people.filter((identity) => matchesQuery(identity, queryWords)).map(suggestion);
   const found = [
-    ...(onItem.status === "fulfilled"
-      ? onItem.value.filter((identity) => matchesQuery(identity, queryWords)).map(suggestion)
-      : []),
+    ...(onItem.status === "fulfilled" ? matching(onItem.value.people) : []),
+    ...(onProject.status === "fulfilled" ? matching(onProject.value) : []),
     ...(inOrganization.status === "fulfilled" ? inOrganization.value : []),
   ];
   const seen = new Set<string>();

@@ -3,6 +3,7 @@ import type { AzureDevOpsConnectionInput } from "../src/azure-devops.ts";
 import {
   deleteAzureItemComment,
   editAzureItemComment,
+  forgetProjectPeople,
   identitiesBaseUrl,
   searchAzureItemPeople,
   setAzureItemCommentReaction,
@@ -169,6 +170,7 @@ describe("changing Azure DevOps comments", () => {
 
 describe("searching Azure DevOps people", () => {
   afterEach(() => {
+    forgetProjectPeople();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -178,13 +180,19 @@ describe("searching Azure DevOps people", () => {
   /** A reply, or "stall" for a request that answers only when it times out. */
   type Answer = Response | (() => Response) | "stall";
 
-  /** Answers the item, its comments and the identities search; records the search URLs. */
+  /**
+   * Answers the item, its comments, the project's recent work items and the
+   * identities search; records the identities search URLs and the queries.
+   */
   function fakePeople(answers: {
     item?: Answer;
     comments?: Answer;
     identities?: Answer;
+    projectItems?: Answer;
+    projectPeople?: Answer;
   }) {
     const searches: URL[] = [];
+    const projectQueries: unknown[] = [];
     const reply = (answer: Answer | undefined, empty: unknown, signal?: AbortSignal | null) =>
       answer === "stall"
         ? new Promise<Response>((_resolve, reject) => {
@@ -204,6 +212,13 @@ describe("searching Azure DevOps people", () => {
         if (url.pathname.endsWith("/4821/comments")) {
           return reply(answers.comments, { comments: [] }, init?.signal);
         }
+        if (url.pathname.endsWith("/Contoso%20Portal/_apis/wit/wiql")) {
+          projectQueries.push(JSON.parse(String(init?.body)));
+          return reply(answers.projectItems, { workItems: [] }, init?.signal);
+        }
+        if (url.pathname.endsWith("/_apis/wit/workitemsbatch")) {
+          return reply(answers.projectPeople, { value: [] }, init?.signal);
+        }
         if (url.pathname.endsWith("/_apis/wit/workitems/4821")) {
           return reply(answers.item, {
             id: 4821,
@@ -213,7 +228,7 @@ describe("searching Azure DevOps people", () => {
         throw new Error(`Unexpected request: ${url}`);
       }),
     );
-    return searches;
+    return Object.assign(searches, { projectQueries });
   }
 
   const itemWithPeople = () =>
@@ -320,7 +335,7 @@ describe("searching Azure DevOps people", () => {
       { id: ME, displayName: "Alex Martin", email: "alex@contoso.com" },
       { id: BRUNO, displayName: "Bruno Côté" },
     ]);
-    expect(searches).toEqual([]);
+    expect(searches).toHaveLength(0);
   });
 
   it("fails a bare @ when the item can't be read", async () => {
@@ -351,6 +366,65 @@ describe("searching Azure DevOps people", () => {
       { id: "44444444-4444-4444-4444-444444444444", displayName: "Alba Reyes", email: "alba@contoso.com" },
       { id: "55555555-5555-5555-5555-555555555555", displayName: "Alan Build" },
     ]);
+  });
+
+  const CARLA = "66666666-6666-6666-6666-666666666666";
+  const projectWithCarla = () => json({ workItems: [{ id: 7 }, { id: 8 }] });
+  const carlaAndAna = () =>
+    json({
+      value: [
+        {
+          id: 7,
+          fields: {
+            "System.AssignedTo": { id: CARLA, displayName: "Carla Diaz", uniqueName: "carla@contoso.com" },
+            "System.CreatedBy": { id: ANA, displayName: "Ana Silva", uniqueName: "ana@contoso.com" },
+          },
+        },
+        { id: 8, fields: { "System.ChangedBy": { id: CARLA, displayName: "Carla Diaz", uniqueName: "carla@contoso.com" } } },
+      ],
+    });
+
+  it("finds people active in the item's project, after the item's own, with only Work Items access", async () => {
+    const searches = fakePeople({
+      item: itemWithPeople,
+      projectItems: projectWithCarla,
+      projectPeople: carlaAndAna,
+      identities: () => new Response("Unauthorized", { status: 401 }),
+    });
+
+    expect(await search("diaz")).toEqual([
+      { id: CARLA, displayName: "Carla Diaz", email: "carla@contoso.com" },
+    ]);
+    expect(await search("")).toEqual([
+      ANA_SUGGESTION,
+      { id: ME, displayName: "Alex Martin", email: "alex@contoso.com" },
+      { id: CARLA, displayName: "Carla Diaz", email: "carla@contoso.com" },
+    ]);
+    expect(searches.projectQueries[0]).toEqual({
+      query: expect.stringContaining("[System.ChangedDate] >= @today - 180"),
+    });
+  });
+
+  it("keeps a project's people for five minutes, and asks again after a failure", async () => {
+    let now = Date.parse("2026-10-19T10:00:00Z");
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let failing = true;
+    const searches = fakePeople({
+      item: itemWithPeople,
+      projectItems: () =>
+        failing ? json({ message: "Busy" }, 503) : projectWithCarla(),
+      projectPeople: carlaAndAna,
+    });
+
+    expect(await search("carla")).toEqual([]);
+    failing = false;
+    expect(await search("carla")).toHaveLength(1);
+    now += 4 * 60_000;
+    expect(await search("carla")).toHaveLength(1);
+    expect(searches.projectQueries).toHaveLength(2);
+    now += 2 * 60_000;
+    await search("carla");
+    expect(searches.projectQueries).toHaveLength(3);
   });
 
   it("fails only when both searches fail", async () => {
