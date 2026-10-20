@@ -176,6 +176,16 @@ function noteLosses(element: HtmlElement) {
     const emphasis = styledEmphasis(element);
     if (emphasis.bold || emphasis.italic || emphasis.strike) lose("emphasis on code");
   }
+  // Markdown tables have no header cells of their own; the write gives none.
+  if (element.tag === "th" || element.tag === "thead") lose("table header cells");
+  if (
+    (element.tag === "ol" && element.attrs.type && element.attrs.type !== "1") ||
+    ((element.tag === "ol" || element.tag === "ul") && has("list-style-type")) ||
+    ((element.tag === "ol" || element.tag === "ul") && has("list-style"))
+  ) {
+    lose("list numbering style");
+  }
+  if (element.tag === "img") noteImageLosses(element, declarations);
   if (element.tag === "sup") lose("superscript");
   if (element.tag === "sub") lose("subscript");
   if (element.tag === "mark") lose("highlight");
@@ -190,6 +200,55 @@ function noteLosses(element: HtmlElement) {
     (Number(element.attrs.colspan ?? 1) > 1 || Number(element.attrs.rowspan ?? 1) > 1)
   ) {
     lose("merged table cells");
+  }
+}
+
+/**
+ * Where an image's address carries its size, so a write gives the image back
+ * as it was: `#ajour-image?width=120&height=80&style=width%3A50%25`.
+ */
+export const IMAGE_SIZE_MARK = "#ajour-image?";
+
+const IMAGE_SIZE_ATTRIBUTE = /^\d+%?$/;
+const IMAGE_SIZE_DECLARATION = /^(?:max-)?(?:width|height)$/;
+const IMAGE_SIZE_VALUE = /^\d+(?:\.\d+)?(?:px|%)$/;
+
+/** An image's size, as the parameters its address carries, or "". */
+function imageSize(element: HtmlElement) {
+  const params = new URLSearchParams();
+  for (const name of ["width", "height"]) {
+    const value = element.attrs[name]?.trim();
+    if (value && IMAGE_SIZE_ATTRIBUTE.test(value)) params.set(name, value);
+  }
+  const style = imageSizeStyle(element.attrs.style ?? "");
+  if (style) params.set("style", style);
+  return params.toString();
+}
+
+/** The size declarations of an image's style, as written again. */
+function imageSizeStyle(style: string) {
+  return style
+    .split(";")
+    .map((declaration) => declaration.split(":").map((part) => part.trim().toLowerCase()))
+    .filter(([name, value]) => name && value && IMAGE_SIZE_DECLARATION.test(name) && IMAGE_SIZE_VALUE.test(value))
+    .map(([name, value]) => `${name}:${value}`)
+    .join(";");
+}
+
+/** Notes what of an image only its address, text and size cannot carry. */
+function noteImageLosses(element: HtmlElement, declarations: Map<string, string>) {
+  for (const [name, value] of declarations) {
+    if (!(IMAGE_SIZE_DECLARATION.test(name) && IMAGE_SIZE_VALUE.test(value))) {
+      lose("image styling");
+      break;
+    }
+  }
+  for (const [name, value] of Object.entries(element.attrs)) {
+    if (name === "width" || name === "height") {
+      if (!IMAGE_SIZE_ATTRIBUTE.test(value.trim())) lose("image styling");
+    } else if (name !== "src" && name !== "alt" && name !== "style") {
+      lose("image attributes");
+    }
   }
 }
 
@@ -500,7 +559,10 @@ function renderInline(element: HtmlElement): string {
     }
     case "img": {
       const src = element.attrs.src?.trim();
-      return src ? `![${escapeText(element.attrs.alt?.trim() ?? "")}](${encodeUrl(src)})` : "";
+      if (!src) return "";
+      const size = imageSize(element);
+      const address = size ? `${src}${IMAGE_SIZE_MARK}${size}` : src;
+      return `![${escapeText(element.attrs.alt?.trim() ?? "")}](${encodeUrl(address)})`;
     }
     case "input":
       return "";

@@ -1,6 +1,7 @@
 import type { AzureWorkItem } from "./azure-devops.js";
 import type { ConnectorSyncedDescription } from "./contract.js";
 import { htmlToMarkdown, htmlToMarkdownWithLosses } from "./html-markdown.js";
+import { toAzureMarkdown } from "./comments.js";
 import { replaceOutsideCode } from "./markdown-code.js";
 import { markdownToHtml } from "./markdown-html.js";
 
@@ -69,7 +70,13 @@ export function describeWorkItem(workItem: AzureWorkItem): ConnectorSyncedDescri
   let lost: string[] = [];
   if (typeof value === "string") {
     if (isMarkdownField(workItem, "System.Description")) {
-      text = markdownMentionsToAjour(normalizeMarkdown(value), workItem);
+      const source = normalizeMarkdown(value);
+      text = markdownMentionsToAjour(source, workItem);
+      // Mentions read and written in different places, such as in code,
+      // would write back changed: keep such a description read-only.
+      // Ids are compared as the write gives them: lower case, as in Ajour.
+      const asWritten = replaceOutsideCode(source, MARKDOWN_MENTION, (_match, id: string) => `@<${id.toLowerCase()}>`);
+      if (toAzureMarkdown(text) !== asWritten) lost = [NOT_WRITABLE_EXACTLY];
     } else {
       const converted = htmlToMarkdownWithLosses(value);
       text = converted.markdown ?? "";

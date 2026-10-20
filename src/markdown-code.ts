@@ -37,8 +37,10 @@ function replaceOutsideCodeSpans(
   let at = 0;
   const runs = /`+/g;
   for (let open = runs.exec(line); open; open = runs.exec(line)) {
-    // A backslash before a backtick makes it text, not a code span.
-    if (open.index > 0 && line[open.index - 1] === "\\") continue;
+    // An odd run of backslashes before a backtick makes it text, not a code span.
+    let backslashes = 0;
+    for (let before = open.index - 1; before >= 0 && line[before] === "\\"; before -= 1) backslashes += 1;
+    if (backslashes % 2 === 1) continue;
     const close = new RegExp(`(?<!\`)${"`".repeat(open[0].length)}(?!\`)`, "g");
     close.lastIndex = open.index + open[0].length;
     const end = close.exec(line);

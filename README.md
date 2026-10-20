@@ -82,7 +82,10 @@ read (Ajour's ADR 0009):
   checkboxes, embedded content, merged table cells and line breaks in table
   cells. Bold, italic and strikethrough set by a style become Markdown
   emphasis. Images are kept as Markdown images with their attachment address
-  and never count as lost.
+  and never count as lost; an image's width, height and size styling travel
+  in its address as `#ajour-image?width=…`, so a write gives them back. Other
+  image styling or attributes, table header cells (a write gives tables none,
+  as Azure DevOps' editor does) and list numbering styles are named in `lost`.
 - An HTML description whose Markdown would not write back as itself, through
   the converter `writeDescription` uses, also names "formatting Ajour cannot
   write back" in `lost`, so Ajour keeps it read-only: an edit there would

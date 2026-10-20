@@ -33,6 +33,8 @@ describe("Markdown written back as HTML reads back the same", () => {
     "a code block": "<pre>const a = 1;\n  if (a &lt; 2) {}\n```\n</pre>",
     "a table": "<table><tbody><tr><td><b>Day</b></td><td>Hours</td></tr><tr><td>Mon</td><td>7|5</td></tr><tr><td></td><td>`x`</td></tr></tbody></table>",
     images: '<div><img src="https://dev.azure.com/a/_apis/wit/attachments/1?fileName=x (1).png" alt="Dia_gram"></div>',
+    "an image's size":
+      '<div><img src="https://e.test/x.png" alt="X" width="120" height="80" style="width: 50%; max-width: 300px"></div>',
     mentions: `<div>Ask <a href="#" data-vss-mention="version:2.0,${ANA}">@Ana Silva</a> first</div>`,
   };
 
@@ -115,6 +117,21 @@ describe("markdownToHtml", () => {
     expect(markdownToHtml("[a](x\\)y) [b](https://e.test/a(b(c))) [c](https://e.test \"Title\")")).toBe(
       '<p><a href="x)y">a</a> <a href="https://e.test/a(b(c))">b</a> <a href="https://e.test">c</a></p>',
     );
+  });
+
+  it("writes a table as Azure DevOps' editor does, without header cells", () => {
+    expect(markdownToHtml("| A | B |\n| --- | --- |\n| 1 | 2 |")).toBe(
+      "<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>1</td><td>2</td></tr></tbody></table>",
+    );
+  });
+
+  it("gives an image back its size, and only a size", () => {
+    expect(markdownToHtml("![X](https://e.test/x.png#ajour-image?width=120&style=width%3A50%25)")).toBe(
+      '<p><img src="https://e.test/x.png" alt="X" width="120" style="width:50%"></p>',
+    );
+    expect(
+      markdownToHtml("![X](https://e.test/x.png#ajour-image?width=1%22onerror%3D%22x&style=background%3Aurl(x))"),
+    ).toBe('<p><img src="https://e.test/x.png" alt="X"></p>');
   });
 
   it("starts an ordered list where its first number says", () => {

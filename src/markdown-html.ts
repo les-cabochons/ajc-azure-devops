@@ -6,7 +6,7 @@
 // text, never passed through. A blank line ends a list, as html-markdown.ts
 // writes two lists apart, so HTML → Markdown → HTML → Markdown is stable.
 
-import { decodeHtmlEntities } from "./html-markdown.js";
+import { decodeHtmlEntities, IMAGE_SIZE_MARK } from "./html-markdown.js";
 
 type Block =
   | { kind: "paragraph"; lines: string[] }
@@ -265,9 +265,10 @@ function renderBlock(block: Block, inItem: boolean): string {
     }
     case "table": {
       const width = Math.max(block.header.length, ...block.rows.map((row) => row.length));
-      const row = (cells: string[], tag: "th" | "td") =>
-        `<tr>${Array.from({ length: width }, (_, index) => `<${tag}>${renderInline(cells[index] ?? "")}</${tag}>`).join("")}</tr>`;
-      return `<table><thead>${row(block.header, "th")}</thead><tbody>${block.rows.map((cells) => row(cells, "td")).join("")}</tbody></table>`;
+      const row = (cells: string[]) =>
+        `<tr>${Array.from({ length: width }, (_, index) => `<td>${renderInline(cells[index] ?? "")}</td>`).join("")}</tr>`;
+      // Azure DevOps' own tables have no header cells: the first row is a row.
+      return `<table><tbody>${[block.header, ...block.rows].map(row).join("")}</tbody></table>`;
     }
   }
 }
@@ -320,6 +321,7 @@ type Inline =
 /** Inline Markdown as HTML: escapes, code, links, images, mentions and emphasis. */
 export function renderInline(text: string): string {
   const tokens: Inline[] = [];
+  const brackets = matchBrackets(text);
   const pushText = (value: string) => {
     const last = tokens[tokens.length - 1];
     if (last?.kind === "html") last.html += escapeHtml(value);
@@ -369,12 +371,13 @@ export function renderInline(text: string): string {
     }
 
     if (char === "!" && text[at + 1] === "[") {
-      const link = parseLink(text, at + 1);
+      const link = parseLink(text, at + 1, brackets);
       if (link) {
         const alt = escapeHtml(decodeHtmlEntities(unescapeMarkdown(link.label)));
+        const { src, size } = splitImageSize(link.url);
         tokens.push({
           kind: "html",
-          html: isSafeUrl(link.url) ? `<img src="${escapeHtml(link.url)}" alt="${alt}">` : alt,
+          html: isSafeUrl(src) ? `<img src="${escapeHtml(src)}" alt="${alt}"${size}>` : alt,
         });
         at = link.end;
         continue;
@@ -382,7 +385,7 @@ export function renderInline(text: string): string {
     }
 
     if (char === "[") {
-      const link = parseLink(text, at);
+      const link = parseLink(text, at, brackets);
       if (link) {
         const mention = /^mention:([0-9a-fA-F-]{36})$/.exec(link.url);
         if (mention && link.label.startsWith("@")) {
@@ -446,6 +449,26 @@ export function renderInline(text: string): string {
   return resolveEmphasis(tokens);
 }
 
+/**
+ * An image's address without the size html-markdown.ts carries in it, and
+ * that size as attributes. Only sizes it could have written are taken.
+ */
+function splitImageSize(url: string) {
+  const mark = url.lastIndexOf(IMAGE_SIZE_MARK);
+  if (mark === -1) return { src: url, size: "" };
+  const params = new URLSearchParams(url.slice(mark + IMAGE_SIZE_MARK.length));
+  let size = "";
+  for (const name of ["width", "height"]) {
+    const value = params.get(name);
+    if (value && /^\d+%?$/.test(value)) size += ` ${name}="${value}"`;
+  }
+  const style = params.get("style");
+  if (style && /^(?:(?:max-)?(?:width|height):\d+(?:\.\d+)?(?:px|%);?)+$/.test(style)) {
+    size += ` style="${escapeHtml(style)}"`;
+  }
+  return { src: url.slice(0, mark), size };
+}
+
 /** Whether an address is web, mail or relative, never a script or data. */
 function isSafeUrl(url: string) {
   // A browser drops control characters, and tabs and newlines anywhere, before
@@ -469,28 +492,33 @@ function findCodeClose(text: string, from: number, length: number) {
   return -1;
 }
 
-/** A link or image at `[`: its label, its address and where it ends. */
-function parseLink(text: string, open: number) {
-  let depth = 0;
-  let close = -1;
-  for (let at = open; at < text.length; at += 1) {
+/**
+ * Each `[` and the `]` that closes it, found in one pass: escapes and code
+ * spans hold no brackets, and an unclosed `[` closes nothing.
+ */
+function matchBrackets(text: string) {
+  const matches = new Map<number, number>();
+  const open: number[] = [];
+  for (let at = 0; at < text.length; at += 1) {
     const char = text[at];
     if (char === "\\") {
       at += 1;
     } else if (char === "`") {
-      const run = /^`+/.exec(text.slice(at))![0];
+      const run = /^`+/.exec(text.slice(at, at + 1000))![0];
       const end = findCodeClose(text, at + run.length, run.length);
-      if (end !== -1) at = end + run.length - 1;
+      at = end === -1 ? at + run.length - 1 : end + run.length - 1;
     } else if (char === "[") {
-      depth += 1;
-    } else if (char === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        close = at;
-        break;
-      }
+      open.push(at);
+    } else if (char === "]" && open.length > 0) {
+      matches.set(open.pop()!, at);
     }
   }
+  return matches;
+}
+
+/** A link or image at `[`: its label, its address and where it ends. */
+function parseLink(text: string, open: number, brackets: Map<number, number>) {
+  const close = brackets.get(open) ?? -1;
   if (close === -1 || text[close + 1] !== "(") return undefined;
   const destination = parseDestination(text, close + 2);
   if (!destination) return undefined;
@@ -561,45 +589,53 @@ function unescapeMarkdown(text: string) {
   return text.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "$1");
 }
 
-/** Pairs emphasis delimiters, CommonMark's way, and renders the tokens. */
+/**
+ * Pairs emphasis delimiters, CommonMark's way, and renders the tokens. Open
+ * delimiters wait on a stack, and a closer that finds no opener marks where
+ * later closers of its kind stop looking, so pairing takes linear time.
+ */
 function resolveEmphasis(tokens: Inline[]): string {
   type Delimiter = Extract<Inline, { kind: "delimiter" }> & { open: string[]; close: string[] };
   const items = tokens.map((token) =>
     token.kind === "delimiter" ? ({ ...token, open: [], close: [] } as Delimiter) : token,
   );
-  for (let closer = 0; closer < items.length; closer += 1) {
-    const close = items[closer]!;
-    if (close.kind !== "delimiter" || !close.canClose) continue;
-    for (let opener = closer - 1; opener >= 0 && close.count > 0; opener -= 1) {
-      const open = items[opener]!;
-      if (open.kind !== "delimiter" || !open.canOpen || open.char !== close.char || open.count === 0) {
-        continue;
-      }
-      // A run that can both open and close pairs only when the sum is not a
-      // multiple of three, unless both are.
-      if (
-        (open.canClose || close.canOpen) &&
-        (open.count + close.count) % 3 === 0 &&
-        !(open.count % 3 === 0 && close.count % 3 === 0)
-      ) {
-        continue;
-      }
-      const used = close.char === "~" ? 2 : open.count >= 2 && close.count >= 2 ? 2 : 1;
-      const tag = close.char === "~" ? "del" : used === 2 ? "strong" : "em";
-      open.count -= used;
-      close.count -= used;
-      open.open.unshift(`<${tag}>`);
-      close.close.push(`</${tag}>`);
-      // Delimiters between the pair can no longer pair across it.
-      for (let between = opener + 1; between < closer; between += 1) {
-        const inner = items[between]!;
-        if (inner.kind === "delimiter") {
-          inner.canOpen = false;
-          inner.canClose = false;
+  // Indexes of the delimiters that can still open, in order.
+  const openers: number[] = [];
+  // Per kind of closer, the index below which no opener can match it.
+  const bottoms = new Map<string, number>();
+  for (let index = 0; index < items.length; index += 1) {
+    const close = items[index]!;
+    if (close.kind !== "delimiter") continue;
+    if (close.canClose) {
+      const kind = `${close.char}${close.canOpen ? 1 : 0}${close.count % 3}`;
+      const bottom = bottoms.get(kind) ?? -1;
+      let at = openers.length - 1;
+      while (close.count > 0 && at >= 0 && openers[at]! > bottom) {
+        const open = items[openers[at]!] as Delimiter;
+        // A run that can both open and close pairs only when the sum is not
+        // a multiple of three, unless both are.
+        if (
+          open.char !== close.char ||
+          ((open.canClose || close.canOpen) &&
+            (open.count + close.count) % 3 === 0 &&
+            !(open.count % 3 === 0 && close.count % 3 === 0))
+        ) {
+          at -= 1;
+          continue;
         }
+        const used = close.char === "~" ? 2 : open.count >= 2 && close.count >= 2 ? 2 : 1;
+        const tag = close.char === "~" ? "del" : used === 2 ? "strong" : "em";
+        open.count -= used;
+        close.count -= used;
+        open.open.unshift(`<${tag}>`);
+        close.close.push(`</${tag}>`);
+        // Delimiters between the pair can no longer open across it.
+        openers.length = open.count > 0 ? at + 1 : at;
+        at = openers.length - 1;
       }
-      if (close.count > 0) opener += 1;
+      if (close.count > 0) bottoms.set(kind, index - 1);
     }
+    if (close.canOpen && close.count > 0) openers.push(index);
   }
   return items
     .map((item) => {

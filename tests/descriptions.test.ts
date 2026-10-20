@@ -160,6 +160,12 @@ describe("descriptions a sync sends", () => {
 });
 
 describe("descriptions Ajour cannot write back as they are", () => {
+  it("names a Markdown description whose mentions would not write back as they are", async () => {
+    const candidate = await candidateFor(`\`first\n[@Ana](mention:${ANA})\nlast\``, "Markdown");
+
+    expect(candidate.description?.lost).toEqual(["formatting Ajour cannot write back"]);
+  });
+
   it("names a description whose Markdown would not write back as itself", async () => {
     const candidate = await candidateFor("<div>a<i>x</i>b</div>");
 
@@ -239,9 +245,27 @@ describe("what a conversion loses", () => {
     expect(lost('<div><input type="checkbox" checked> Done</div>')).toEqual(["checkboxes"]);
     expect(lost('<iframe src="https://example.test"></iframe>')).toEqual(["embedded content"]);
     expect(lost('<table><tr><td colspan="2">Wide</td></tr></table>')).toEqual(["merged table cells"]);
-    expect(lost("<table><tr><th>A</th></tr><tr><td>One<br>Two</td></tr></table>")).toEqual([
+    expect(lost("<table><tr><td>A</td></tr><tr><td>One<br>Two</td></tr></table>")).toEqual([
       "line breaks in table cells",
     ]);
+    // A write gives a table no header cells, as Azure DevOps' editor makes them.
+    expect(lost("<table><thead><tr><th>A</th></tr></thead><tr><td>1</td></tr></table>")).toEqual([
+      "table header cells",
+    ]);
+    expect(lost('<ol type="a"><li>x</li></ol><ul style="list-style-type: square"><li>y</li></ul>')).toEqual([
+      "list numbering style",
+    ]);
+  });
+
+  it("carries an image's size in its address, and names other image styling", () => {
+    expect(
+      htmlToMarkdownWithLosses('<img src="https://e.test/x.png" alt="X" width="120" height="80" style="max-width: 50%">'),
+    ).toEqual({
+      markdown: "![X](https://e.test/x.png#ajour-image?width=120&height=80&style=max-width%3A50%25)",
+      lost: [],
+    });
+    expect(lost('<img src="https://e.test/x.png" style="border: 1px solid red">')).toEqual(["image styling"]);
+    expect(lost('<img src="https://e.test/x.png" class="framed">')).toEqual(["image attributes"]);
   });
 
   it("loses nothing over what Markdown holds, images included", () => {
@@ -249,7 +273,7 @@ describe("what a conversion loses", () => {
       lost(
         '<h2>Title</h2><p><b>Bold</b>, <i>italic</i>, <s>gone</s>, <code>x</code> and <a href="https://example.test">a link</a></p>' +
           '<ul><li>One</li></ul><blockquote>Quote</blockquote><pre>code</pre><hr>' +
-          '<table><tr><th>A</th></tr><tr><td>1</td></tr></table>' +
+          '<table><tr><td>A</td></tr><tr><td>1</td></tr></table>' +
           '<img src="https://dev.azure.com/contoso/_apis/wit/attachments/1?fileName=x.png" alt="Diagram" width="300">' +
           '<div style="text-align: left; color: inherit">Plain</div>',
       ),
@@ -326,11 +350,11 @@ describe("what a conversion loses", () => {
   it("keeps a table cell's own emphasis, and names a list in a cell as lost", () => {
     expect(
       htmlToMarkdownWithLosses(
-        '<table><tr><th>Step</th></tr><tr><td style="text-decoration:line-through">Deprecated</td></tr></table>',
+        '<table><tr><td>Step</td></tr><tr><td style="text-decoration:line-through">Deprecated</td></tr></table>',
       ),
     ).toEqual({ markdown: "| Step |\n| --- |\n| ~~Deprecated~~ |", lost: [] });
     expect(
-      lost("<table><tr><th>Step</th></tr><tr><td><ul><li>Restart service</li></ul></td></tr></table>"),
+      lost("<table><tr><td>Step</td></tr><tr><td><ul><li>Restart service</li></ul></td></tr></table>"),
     ).toEqual(["lists or blocks in table cells"]);
   });
 
