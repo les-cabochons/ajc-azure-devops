@@ -221,6 +221,28 @@ describe("writeDescription", () => {
     expect(patches).toEqual([]);
   });
 
+  it("writes over lost formatting the user allowed, keeping it in the blocks they left alone", async () => {
+    const item = {
+      rev: 2,
+      description: '<div><u>Old plan</u></div><div><br></div><div><span style="color: red">Red note</span></div>',
+    };
+    const patches = stubAzure(item);
+
+    await expect(
+      writeDescription(connection, {
+        sourceId: SOURCE_ID,
+        text: "New plan\n\nRed note",
+        expected: "Old plan\n\nRed note",
+        allowLoss: true,
+      }),
+    ).resolves.toMatchObject({ outcome: "written" });
+    expect(patches[0]![1]).toEqual({
+      op: "add",
+      path: "/fields/System.Description",
+      value: '<div>New plan</div><div><br></div><div><span style="color: red">Red note</span></div>',
+    });
+  });
+
   it("passes on a refused write even when the item changed meanwhile", async () => {
     const item = { rev: 4, description: "<div>Old plan</div>" };
     stubAzure(item, {

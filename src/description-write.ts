@@ -90,8 +90,10 @@ export async function writeAzureDescription(
     return { outcome: "conflict", description: current };
   }
   // The same text can come from formatting a colleague added since Ajour read
-  // it, which the write would erase.
-  if (current.cut || current.lost?.length) {
+  // it, which the write would erase. Lossy text is written only when the user
+  // saw the loss and saved anyway; even then, the blocks they did not change
+  // keep their HTML, formatting included.
+  if (current.cut || (current.lost?.length && !request.allowLoss)) {
     throw new Error(
       current.cut
         ? "This description is longer than Ajour keeps. Edit it in Azure DevOps."
