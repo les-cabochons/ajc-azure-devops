@@ -75,8 +75,12 @@ const EMPHASIS_MARKERS: Record<Emphasis, string> = { bold: "**", italic: "_", st
  */
 const activeEmphasis: Record<Emphasis, number> = { bold: 0, italic: 0, strike: 0 };
 
-/** Renders an inline element's children with its tag's and its style's emphasis. */
-function renderEmphasized(element: HtmlElement, tagEmphasis: Emphasis | undefined): string {
+/** Renders an element's content with its tag's and its style's emphasis. */
+function renderEmphasized(
+  element: HtmlElement,
+  tagEmphasis: Emphasis | undefined,
+  render: () => string = () => renderInlineChildren(element.children),
+): string {
   const styled = styledEmphasis(element);
   const wanted = new Set<Emphasis>(tagEmphasis ? [tagEmphasis] : []);
   if (styled.bold) wanted.add("bold");
@@ -86,7 +90,7 @@ function renderEmphasized(element: HtmlElement, tagEmphasis: Emphasis | undefine
   for (const kind of applied) activeEmphasis[kind] += 1;
   let text: string;
   try {
-    text = renderInlineChildren(element.children);
+    text = render();
   } finally {
     for (const kind of applied) activeEmphasis[kind] -= 1;
   }
@@ -427,9 +431,14 @@ function renderTable(table: HtmlElement): string {
           elementsOf(child.children)
             .filter((cell) => cell.tag === "td" || cell.tag === "th")
             .map((cell) => {
-              const text = renderFlow(cell.children);
-              if (text.includes("\n")) lose("line breaks in table cells");
-              return singleLine(text);
+              // A cell holds one line: a list or other block in it is lost, and
+              // the cell's own emphasis goes on its text.
+              if (hasBlockInside(cell)) lose("lists or blocks in table cells");
+              return renderEmphasized(cell, undefined, () => {
+                const text = renderFlow(cell.children);
+                if (text.includes("\n")) lose("line breaks in table cells");
+                return singleLine(text);
+              });
             }),
         );
       } else if (child.tag === "thead" || child.tag === "tbody" || child.tag === "tfoot") {
@@ -448,6 +457,15 @@ function renderTable(table: HtmlElement): string {
   const line = (cells: string[]) =>
     `| ${Array.from({ length: width }, (_, index) => cells[index] ?? "").join(" | ")} |`;
   return [line(header), `| ${Array.from({ length: width }, () => "---").join(" | ")} |`, ...body.map(line)].join("\n");
+}
+
+const CELL_BLOCK_TAGS = new Set(["ul", "ol", "li", "blockquote", "pre", "table", "hr", "h1", "h2", "h3", "h4", "h5", "h6"]);
+
+/** Whether a table cell holds a block Markdown cannot put in a cell. */
+function hasBlockInside(element: HtmlElement): boolean {
+  return elementsOf(element.children).some(
+    (child) => CELL_BLOCK_TAGS.has(child.tag) || hasBlockInside(child),
+  );
 }
 
 function renderInline(element: HtmlElement): string {

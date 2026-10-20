@@ -96,6 +96,12 @@ describe("descriptions a sync sends", () => {
     expect(candidate.description).toEqual({ text: "**Steps**\n\n- Open <u>raw</u>" });
   });
 
+  it("keeps a Markdown description's indented code block", async () => {
+    const candidate = await candidateFor("\r\n    - Literal command\r\n", "Markdown");
+
+    expect(candidate.description).toEqual({ text: "    - Literal command" });
+  });
+
   it("cuts a description longer than Ajour stores, and says so", async () => {
     const candidate = await candidateFor("x".repeat(70_000), "Markdown");
 
@@ -295,6 +301,17 @@ describe("what a conversion loses", () => {
 
   it("names emphasis set on code, which code cannot carry", () => {
     expect(lost('<code style="font-weight:bold">npm test</code>')).toEqual(["emphasis on code"]);
+  });
+
+  it("keeps a table cell's own emphasis, and names a list in a cell as lost", () => {
+    expect(
+      htmlToMarkdownWithLosses(
+        '<table><tr><th>Step</th></tr><tr><td style="text-decoration:line-through">Deprecated</td></tr></table>',
+      ),
+    ).toEqual({ markdown: "| Step |\n| --- |\n| ~~Deprecated~~ |", lost: [] });
+    expect(
+      lost("<table><tr><th>Step</th></tr><tr><td><ul><li>Restart service</li></ul></td></tr></table>"),
+    ).toEqual(["lists or blocks in table cells"]);
   });
 
   it("names each loss once", () => {
