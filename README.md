@@ -78,11 +78,15 @@ read (Ajour's ADR 0009):
 
 - An HTML description is converted to Markdown. The converter names what
   Markdown cannot hold and it dropped, in `lost`: text colour, highlight,
-  font, underline, text alignment, checkboxes, embedded content, merged table
-  cells and line breaks in table cells. Images are kept as Markdown images
-  with their attachment address and never count as lost.
+  font (except on code), underline, text alignment, superscript, subscript,
+  checkboxes, embedded content, merged table cells and line breaks in table
+  cells. Bold, italic and strikethrough set by a style become Markdown
+  emphasis. Images are kept as Markdown images with their attachment address
+  and never count as lost.
 - A description stored as Markdown is kept as written, with nothing lost.
-- Mentions become `[@Name](mention:<identity id>)`, as in comments.
+- Mentions become `[@Name](mention:<identity id>)`, as in comments. A
+  Markdown description names people only by id, so its mentions show the
+  assignee's name, or "someone" for anyone else.
 - A description longer than the 64,000 characters Ajour stores is cut, with
   `cut: true`, so Ajour shows it read-only.
 

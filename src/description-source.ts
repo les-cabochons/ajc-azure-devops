@@ -29,7 +29,7 @@ export async function readAzureDescription(
   const id = requireWorkItemId(config, request.sourceId);
   const workItem = await requestAzureDevOps<AzureWorkItem>(
     config,
-    `/_apis/wit/workitems/${id}?fields=System.Description&api-version=7.1`,
+    `/_apis/wit/workitems/${id}?fields=System.Description,System.AssignedTo&api-version=7.1`,
   );
   return { description: describeWorkItem(workItem) };
 }

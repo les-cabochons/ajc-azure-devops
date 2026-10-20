@@ -2,6 +2,26 @@ import type { AzureWorkItem } from "./azure-devops.js";
 import type { ConnectorSyncedDescription } from "./contract.js";
 import { htmlToMarkdownWithLosses } from "./html-markdown.js";
 
+/** A Markdown description's mention, as Azure DevOps writes it. */
+const MARKDOWN_MENTION = /@<([0-9a-fA-F-]{36})>/g;
+
+/**
+ * A Markdown description names the people it mentions only by id. The item's
+ * assignee is named in the sync's fields; anyone else shows as "someone".
+ */
+function markdownMentionsToAjour(text: string, workItem: AzureWorkItem) {
+  const assignee = workItem.fields?.["System.AssignedTo"] as
+    | { id?: string; displayName?: string }
+    | undefined;
+  return text.replace(MARKDOWN_MENTION, (_match, id: string) => {
+    const name =
+      assignee?.id?.toLowerCase() === id.toLowerCase() && assignee.displayName
+        ? assignee.displayName.replace(/[[\]\\]/g, "")
+        : "someone";
+    return `[@${name}](mention:${id.toLowerCase()})`;
+  });
+}
+
 /** The most of a description Ajour stores (Ajour's ADR 0009). */
 export const MAX_DESCRIPTION_LENGTH = 64_000;
 
@@ -22,7 +42,7 @@ export function describeWorkItem(workItem: AzureWorkItem): ConnectorSyncedDescri
   let lost: string[] = [];
   if (typeof value === "string") {
     if (isMarkdownField(workItem, "System.Description")) {
-      text = value.replace(/\r\n?/g, "\n").trim();
+      text = markdownMentionsToAjour(value.replace(/\r\n?/g, "\n").trim(), workItem);
     } else {
       const converted = htmlToMarkdownWithLosses(value);
       text = converted.markdown ?? "";

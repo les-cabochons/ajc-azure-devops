@@ -111,6 +111,12 @@ describe("descriptions a sync sends", () => {
     expect(candidate.description).toEqual({ text: `Ask [@Ana Silva](mention:${ANA}) first` });
   });
 
+  it("writes a Markdown description's mentions as Ajour's mention links", async () => {
+    const candidate = await candidateFor(`Ask @<${ANA.toUpperCase()}> first`, "Markdown");
+
+    expect(candidate.description).toEqual({ text: `Ask [@someone](mention:${ANA}) first` });
+  });
+
   it("sends an empty description when the item has none", async () => {
     const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = String(input);
@@ -176,7 +182,7 @@ describe("readDescription", () => {
       ),
     ).resolves.toEqual({ description: { text: "~~Old~~ plan" } });
     expect(urls[0]).toBe(
-      "https://dev.azure.com/contoso/_apis/wit/workitems/4821?fields=System.Description&api-version=7.1",
+      "https://dev.azure.com/contoso/_apis/wit/workitems/4821?fields=System.Description,System.AssignedTo&api-version=7.1",
     );
   });
 
@@ -222,6 +228,23 @@ describe("what a conversion loses", () => {
           '<div style="text-align: left; color: inherit">Plain</div>',
       ),
     ).toEqual([]);
+  });
+
+  it("names superscript and subscript, which Markdown drops", () => {
+    expect(lost("<div>10 m<sup>2</sup> of H<sub>2</sub>O</div>")).toEqual(["superscript", "subscript"]);
+  });
+
+  it("keeps a code block's own font, and styled emphasis as Markdown", () => {
+    expect(htmlToMarkdownWithLosses('<pre style="font-family: monospace">npm test</pre>')).toEqual({
+      markdown: "```\nnpm test\n```",
+      lost: [],
+    });
+    expect(
+      htmlToMarkdownWithLosses(
+        '<div><span style="font-weight: bold">Warning</span>, <span style="font-style:italic">soon</span>, ' +
+          '<span style="text-decoration: line-through">never</span></div>',
+      ),
+    ).toEqual({ markdown: "**Warning**, _soon_, ~~never~~", lost: [] });
   });
 
   it("names each loss once", () => {

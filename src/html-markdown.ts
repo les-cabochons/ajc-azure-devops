@@ -64,6 +64,18 @@ function lose(what: string) {
 }
 
 const EMPTY_STYLE_VALUES = new Set(["", "inherit", "initial", "unset", "transparent", "none"]);
+const CODE_TAGS = new Set(["pre", "code", "kbd", "samp", "tt"]);
+
+/** The bold, italic and strikethrough an element's style asks for, as Markdown can hold them. */
+function styledEmphasis(element: HtmlElement) {
+  const style = (element.attrs.style ?? "").toLowerCase().replace(/\s+/g, "");
+  const weight = /(?:^|;)font-weight:([^;]+)/.exec(style)?.[1] ?? "";
+  return {
+    bold: weight === "bold" || weight === "bolder" || Number(weight) >= 600,
+    italic: /(?:^|;)font-style:(?:italic|oblique)/.test(style),
+    strike: /(?:^|;)text-decoration(?:-line)?:[^;]*line-through/.test(style),
+  };
+}
 
 /** Notes what an element's styling or attributes carry that Markdown cannot. */
 function noteLosses(element: HtmlElement) {
@@ -78,9 +90,16 @@ function noteLosses(element: HtmlElement) {
   };
   if (has("color") || (element.tag === "font" && element.attrs.color)) lose("text colour");
   if (has("background-color") || has("background")) lose("highlight");
-  if (has("font-family") || has("font-size") || (element.tag === "font" && (element.attrs.face || element.attrs.size))) {
+  // Code keeps its own font as a code span or block, so its font is not lost.
+  if (
+    !CODE_TAGS.has(element.tag) &&
+    (has("font-family") || has("font-size") || (element.tag === "font" && (element.attrs.face || element.attrs.size)))
+  ) {
     lose("font");
   }
+  if (element.tag === "sup") lose("superscript");
+  if (element.tag === "sub") lose("subscript");
+  if (element.tag === "mark") lose("highlight");
   const decoration = declarations.get("text-decoration") ?? declarations.get("text-decoration-line") ?? "";
   if (element.tag === "u" || element.tag === "ins" || decoration.includes("underline")) lose("underline");
   const alignment = declarations.get("text-align") ?? element.attrs.align?.toLowerCase() ?? "";
@@ -391,8 +410,15 @@ function renderInline(element: HtmlElement): string {
     }
     case "input":
       return "";
-    default:
-      return renderInlineChildren(element.children);
+    default: {
+      // A span's style can carry the emphasis Markdown has, as pasted text does.
+      const emphasis = styledEmphasis(element);
+      let text = renderInlineChildren(element.children);
+      if (emphasis.strike) text = wrap(text, "~~");
+      if (emphasis.italic) text = wrap(text, "_");
+      if (emphasis.bold) text = wrap(text, "**");
+      return text;
+    }
   }
 }
 
