@@ -110,7 +110,7 @@ describe("markdownToHtml", () => {
 
   it("decodes character references outside code", () => {
     expect(markdownToHtml("a &#65; &amp; &copy; `&#65;` [x](https://e.test/?a=1&amp;b=2)")).toBe(
-      '<div>a A &amp; &amp;copy; <code>&amp;#65;</code> <a href="https://e.test/?a=1&amp;b=2">x</a></div>',
+      '<div>a A &amp; © <code>&amp;#65;</code> <a href="https://e.test/?a=1&amp;b=2">x</a></div>',
     );
   });
 

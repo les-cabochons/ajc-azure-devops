@@ -313,6 +313,32 @@ describe("what a conversion loses", () => {
     expect(lost("<div>A</div><div><br></div><div><br></div><div>B</div>")).toEqual([]);
   });
 
+  it("names each place the Markdown would drop spacing or characters", () => {
+    // Breaks at a line's edges show empty lines.
+    expect(lost("<div>A<br>B<br><br></div><div>C</div>")).toEqual(["extra blank lines"]);
+    expect(lost("<div><br>A</div>")).toEqual(["extra blank lines"]);
+    expect(lost("<div>A<br></div><div>B</div>")).toEqual([]);
+    // Several empty lines inside a block, where no HTML between blocks is kept.
+    expect(lost("<blockquote><div>A</div><div><br></div><div><br></div><div>B</div></blockquote>")).toEqual([
+      "extra blank lines",
+    ]);
+    expect(lost("<blockquote><div>A</div><div><br></div><div>B</div></blockquote>")).toEqual([]);
+    // Blocks set apart inside a list item.
+    expect(lost("<ul><li><div>A</div><p>B</p></li><li>C</li></ul>")).toEqual(["blank lines in list items"]);
+    // Empty lines at the end of code.
+    expect(lost("<pre>A\nB\n\n</pre><div>C</div>")).toEqual(["blank lines in code"]);
+    expect(lost("<pre>A\nB\n</pre>")).toEqual([]);
+    // Breaks in a heading or in inline code.
+    expect(lost("<h1>A<br>B</h1>")).toEqual(["line breaks in headings"]);
+    expect(lost("<div><code>B<br>C</code></div>")).toEqual(["line breaks in code"]);
+    // Any space Ajour trims from the end, not only a non-breaking one.
+    expect(lost("<div>A<br>B&#8195;</div>")).toEqual(["spaces at the end"]);
+    // A character reference the reader does not know.
+    expect(lost("<div>&copy; 2026 &eacute;t&eacute; &Eacute;</div>")).toEqual([]);
+    expect(htmlToMarkdownWithLosses("<div>&Eacute;t&eacute; &frac12;</div>").markdown).toBe("Été ½");
+    expect(lost("<div>&notarealname; 2026</div>")).toEqual(["characters Ajour cannot read"]);
+  });
+
   it("names formatting anywhere inside a mention", () => {
     expect(
       lost(

@@ -36,6 +36,22 @@ function htmlFor(workItem: AzureWorkItem, currentText: string, text: string) {
   return patched;
 }
 
+/**
+ * The Markdown to write to an item that stores its description as Markdown:
+ * the edit, with the blank lines and spaces the read trimmed from the
+ * source's start and end, and its line endings, as they were.
+ */
+function markdownFor(workItem: AzureWorkItem, text: string) {
+  const source = workItem.fields?.["System.Description"];
+  const written = toAzureMarkdown(text);
+  if (typeof source !== "string" || !source.trim()) return written;
+  const lines = source.replace(/\r\n?/g, "\n");
+  const start = /^(?:[ \t]*\n)*/.exec(lines)![0];
+  const end = lines.slice(lines.trimEnd().length);
+  const whole = `${start}${written}${end}`;
+  return source.includes("\r\n") ? whole.replace(/\n/g, "\r\n") : whole;
+}
+
 /** Whether a refused patch is how Azure DevOps answers a failed test operation. */
 function isRevisionTestFailure(error: unknown) {
   return error instanceof Error && /request failed \((?:400|409|412)\)/.test(error.message);
@@ -84,7 +100,7 @@ export async function writeAzureDescription(
   }
 
   const markdown = isMarkdownField(workItem, "System.Description");
-  const value = markdown ? toAzureMarkdown(request.text) : htmlFor(workItem, current.text, request.text);
+  const value = markdown ? markdownFor(workItem, request.text) : htmlFor(workItem, current.text, request.text);
   if (value.length > AZURE_DESCRIPTION_MAX_LENGTH) {
     throw new Error(
       `This description is too long for Azure DevOps: ${value.length.toLocaleString("en-US")} of ${AZURE_DESCRIPTION_MAX_LENGTH.toLocaleString("en-US")} characters once converted.`,

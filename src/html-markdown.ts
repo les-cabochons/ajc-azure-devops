@@ -1,3 +1,5 @@
+import { NAMED_ENTITIES } from "./html-entities.js";
+
 // Converts an Azure DevOps HTML description to the markdown Ajour renders in
 // backlog item notes. The parser is lenient, like the editor's HTML: unclosed
 // list items and paragraphs close themselves, stray end tags are ignored, and
@@ -396,34 +398,17 @@ function noteListLosses(element: HtmlElement, declarations: Map<string, string>,
 }
 
 export function decodeHtmlEntities(value: string) {
-  return value.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (entity, token: string) => {
-    const normalizedToken = token.toLowerCase();
-    if (normalizedToken.startsWith("#x")) {
-      const codePoint = Number.parseInt(normalizedToken.slice(2), 16);
-      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity;
+  return value.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (entity, token: string) => {
+    if (token.startsWith("#")) {
+      const hex = token[1] === "x" || token[1] === "X";
+      const codePoint = Number.parseInt(token.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(codePoint) && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
     }
-
-    if (normalizedToken.startsWith("#")) {
-      const codePoint = Number.parseInt(normalizedToken.slice(1), 10);
-      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity;
-    }
-
-    switch (normalizedToken) {
-      case "amp":
-        return "&";
-      case "lt":
-        return "<";
-      case "gt":
-        return ">";
-      case "quot":
-        return "\"";
-      case "apos":
-        return "'";
-      case "nbsp":
-        return "\u00A0";
-      default:
-        return entity;
-    }
+    const named = NAMED_ENTITIES.get(token);
+    if (named !== undefined) return String.fromCodePoint(named);
+    // Shown as written, which the Markdown cannot give back as a character.
+    lose("characters Ajour cannot read");
+    return entity;
   });
 }
 
@@ -550,8 +535,15 @@ function flowItems(nodes: HtmlNode[]): FlowItem[] {
   let inline = "";
   let inlineFirst = -1;
   let spaced = false;
+  let emptyLines = 0;
+  flowDepth += 1;
   const flush = (last: number) => {
     const text = escapeLineStarts(cleanLines(inline));
+    // A break before a block's text, or two after it, shows an empty line the
+    // Markdown has no place for.
+    if (text.length > 0 && (/^[ \t]*\n/.test(inline) || /\n[ \t]*\n[ \t]*$/.test(inline))) {
+      lose("extra blank lines");
+    }
     if (text.length > 0) {
       items.push({ text, paragraph: false, spaced, first: inlineFirst, last });
       spaced = false;
@@ -565,11 +557,16 @@ function flowItems(nodes: HtmlNode[]): FlowItem[] {
       flush(index - 1);
       const text = renderBlock(node);
       if (trimSpaces(text).length > 0) {
+        // Only the top level keeps the HTML between blocks, with each of
+        // several empty lines; inside a block they become one.
+        if (emptyLines > 1 && flowDepth > 1) lose("extra blank lines");
         items.push({ text, paragraph: PARAGRAPH_TAGS.has(node.tag), spaced, first: index, last: index });
         spaced = false;
+        emptyLines = 0;
       } else if (LINE_TAGS.has(node.tag) && items.length > 0) {
         // An empty line of the editor sets the lines around it apart.
         spaced = true;
+        emptyLines += 1;
       }
       return;
     }
@@ -583,8 +580,12 @@ function flowItems(nodes: HtmlNode[]): FlowItem[] {
     }
   });
   flush(nodes.length - 1);
+  flowDepth -= 1;
   return items;
 }
+
+/** How deep in blocks the flow being read is: 1 at a description's top. */
+let flowDepth = 0;
 
 /** The separator a flow puts before `item`, after `previous`. */
 function flowSeparator(previous: FlowItem, item: FlowItem) {
@@ -678,7 +679,7 @@ function finishMarkdown(text: string) {
   if (collapsed !== text) lose("extra blank lines");
   const started = collapsed.replace(/^[ \t\n\r\f]+/, "");
   const finished = started.trimEnd();
-  if (started.slice(finished.length).includes(" ")) lose("spaces at the end");
+  if (/[^ \t\n\r\f]/.test(started.slice(finished.length))) lose("spaces at the end");
   return finished;
 }
 
@@ -688,6 +689,11 @@ function finishPart(text: string, first: boolean, last: boolean) {
   if (first) finished = finished.replace(/^[ \t\n\r\f]+/, "");
   if (last) finished = finished.trimEnd();
   return finished;
+}
+
+/** Whether an element holds a line break. */
+function hasBreak(element: HtmlElement): boolean {
+  return elementsOf(element.children).some((child) => child.tag === "br" || hasBreak(child));
 }
 
 /** Whether an element holds anything but plain spans: formatting a mention cannot keep. */
@@ -707,6 +713,8 @@ function renderBlock(element: HtmlElement): string {
     case "h6": {
       // A heading is bold by default, so its own normal weight is lost too.
       noteEmphasisResets(element, "bold");
+      // A Markdown heading is one line.
+      if (hasBreak(element)) lose("line breaks in headings");
       headingDepth += 1;
       let text: string;
       try {
@@ -769,8 +777,16 @@ function renderListItem(item: HtmlElement): string {
   if (hasCodeWithBlankLine(item, /\n[ \t]*\n/)) lose("blank lines in code");
   const items = flowItems(item.children);
   const children = elementsOf(item.children);
+  const isList = (entry: FlowItem) => {
+    const node = item.children[entry.first];
+    return node?.kind === "element" && (node.tag === "ul" || node.tag === "ol");
+  };
   if (
     items.some((entry) => entry.spaced || /\n[ \t]*\n/.test(entry.text)) ||
+    items.some(
+      (entry, index) =>
+        index > 0 && flowSeparator(items[index - 1]!, entry) === "\n\n" && !isList(entry) && !isList(items[index - 1]!),
+    ) ||
     children.some((child, index) => child.tag === "p" && children[index + 1]?.tag === "p")
   ) {
     lose("blank lines in list items");
@@ -801,7 +817,10 @@ function noteCodeFormatting(element: HtmlElement) {
 
 function renderCodeBlock(element: HtmlElement): string {
   noteCodeFormatting(element);
-  const code = textContent(element).replace(/^\n/, "").replace(/\n+$/, "");
+  const text = textContent(element).replace(/^\n/, "");
+  // A newline before the end tag shows nothing; more show empty lines.
+  if (/\n[ \t]*\n$/.test(text)) lose("blank lines in code");
+  const code = text.replace(/\n+$/, "");
   // The Markdown keeps one blank line at most, in code too.
   if (/\n[ \t]*\n[ \t]*\n/.test(code)) lose("blank lines in code");
   if (code.trim().length === 0) {
@@ -874,6 +893,8 @@ function renderInline(element: HtmlElement): string {
     case "samp":
     case "tt":
       noteCodeFormatting(element);
+      // A code span is one line.
+      if (hasBreak(element)) lose("line breaks in code");
       return renderCodeSpan(textContent(element));
     case "a": {
       // An Azure DevOps mention, as Ajour writes one.

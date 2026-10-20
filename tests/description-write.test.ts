@@ -143,6 +143,18 @@ describe("writeDescription", () => {
     });
   });
 
+  it("keeps a Markdown item's blank edges and line endings as they were", async () => {
+    const item = { rev: 2, description: "\r\nA\r\nB  \r\n\r\n", markdown: true };
+    const patches = stubAzure(item);
+
+    await writeDescription(connection, { sourceId: SOURCE_ID, text: "Z\nB", expected: "A\nB" });
+    expect(patches[0]![1]).toEqual({
+      op: "add",
+      path: "/fields/System.Description",
+      value: "\r\nZ\r\nB  \r\n\r\n",
+    });
+  });
+
   it("writes nothing over a description changed since Ajour read it", async () => {
     const item = { rev: 9, description: "<div>Changed by a colleague</div>" };
     const patches = stubAzure(item);
