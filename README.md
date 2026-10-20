@@ -92,8 +92,27 @@ read (Ajour's ADR 0009):
 
 `readDescription` returns a work item's current description the same way.
 Ajour reads it when the user starts editing and before it saves. Reading needs
-Work Items (Read). The manifest declares `description` with Azure DevOps'
-limit of 1,000,000 characters. Writing descriptions back comes later.
+Work Items (Read). The manifest declares `description` with `write: true` and
+Azure DevOps' limit of 1,000,000 characters.
+
+`writeDescription` writes the user's edit back, which needs Work Items (Read &
+write):
+
+- It reads the item with its revision. If its description, converted as a
+  sync converts it, is no longer Ajour's `expected` text, it writes nothing
+  and answers `conflict` with the current description.
+- An item that stores its description as Markdown gets Markdown, with
+  mentions as `@<identity id>`. Any other gets HTML from a dependency-free
+  converter for the Markdown above and the CommonMark people type: headings,
+  paragraphs whose line breaks stay line breaks, lists, quotes, code, rules,
+  tables, links, images, emphasis, strikethrough and mentions as
+  `data-vss-mention` links. Raw HTML stays text, and only web, mail and
+  relative addresses become links or images. HTML → Markdown → HTML →
+  Markdown returns the same Markdown.
+- Converted text over 1,000,000 characters is refused with the count.
+- The patch tests the revision it read, so a change made in between answers
+  `conflict` rather than being written over.
+- A description longer than Ajour keeps is never written over.
 
 ## Comments
 
