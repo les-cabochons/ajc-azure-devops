@@ -55,18 +55,18 @@ describe("markdownToHtml", () => {
   });
 
   it("keeps each line break of a paragraph", () => {
-    expect(markdownToHtml("One\nTwo\n\nThree")).toBe("<p>One<br>Two</p><p>Three</p>");
+    expect(markdownToHtml("One\nTwo\n\nThree")).toBe("<div>One<br>Two</div><div><br></div><div>Three</div>");
   });
 
   it("writes a mention as an Azure DevOps mention", () => {
     expect(markdownToHtml(`Hi [@Ana Silva](mention:${ANA.toUpperCase()})`)).toBe(
-      `<p>Hi <a href="#" data-vss-mention="version:2.0,${ANA}">@Ana Silva</a></p>`,
+      `<div>Hi <a href="#" data-vss-mention="version:2.0,${ANA}">@Ana Silva</a></div>`,
     );
   });
 
   it("reads the CommonMark people type", () => {
     expect(markdownToHtml("*italic* __bold__ ***both***")).toBe(
-      "<p><em>italic</em> <strong>bold</strong> <em><strong>both</strong></em></p>",
+      "<div><em>italic</em> <strong>bold</strong> <em><strong>both</strong></em></div>",
     );
     expect(markdownToHtml("* a\n* b\n\n1) one\n2) two")).toBe(
       "<ul><li>a</li><li>b</li></ul><ol><li>one</li><li>two</li></ol>",
@@ -74,49 +74,49 @@ describe("markdownToHtml", () => {
     expect(markdownToHtml("Title\n===\n\nSub\n---")).toBe("<h1>Title</h1><h2>Sub</h2>");
     expect(markdownToHtml("    indented code")).toBe("<pre><code>indented code</code></pre>");
     expect(markdownToHtml("See <https://example.com/x>")).toBe(
-      '<p>See <a href="https://example.com/x">https://example.com/x</a></p>',
+      '<div>See <a href="https://example.com/x">https://example.com/x</a></div>',
     );
   });
 
   it("keeps a word's underscores as written", () => {
-    expect(markdownToHtml("snake_case_name and 2*3*4")).toBe("<p>snake_case_name and 2<em>3</em>4</p>");
+    expect(markdownToHtml("snake_case_name and 2*3*4")).toBe("<div>snake_case_name and 2<em>3</em>4</div>");
   });
 
   it("shows raw HTML as text, never as HTML", () => {
     expect(markdownToHtml('<script>alert("x")</script> <b>no</b>')).toBe(
-      "<p>&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &lt;b&gt;no&lt;/b&gt;</p>",
+      "<div>&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &lt;b&gt;no&lt;/b&gt;</div>",
     );
     expect(markdownToHtml("[x](javascript:alert(1)) ![y](data:image/png;base64,AA) <javascript:alert(1)>")).toBe(
-      "<p>x y &lt;javascript:alert(1)&gt;</p>",
+      "<div>x y &lt;javascript:alert(1)&gt;</div>",
     );
   });
 
   it("never lets a control character hide an unsafe address", () => {
     expect(markdownToHtml("[click](<\u0001javascript:alert(1)>) ![x](<\u0001data:text/html;base64,AA>)")).toBe(
-      "<p>click x</p>",
+      "<div>click x</div>",
     );
-    expect(markdownToHtml("[x](javascript&#58;alert(1))")).toBe("<p>x</p>");
+    expect(markdownToHtml("[x](javascript&#58;alert(1))")).toBe("<div>x</div>");
   });
 
   it("reads emphasis and code across a paragraph's line breaks", () => {
     expect(markdownToHtml("**A\nB** and `two\nlines`")).toBe(
-      "<p><strong>A<br>B</strong> and <code>two lines</code></p>",
+      "<div><strong>A<br>B</strong> and <code>two lines</code></div>",
     );
   });
 
   it("keeps a backslash no line break follows", () => {
-    expect(markdownToHtml("a\\\nb\\")).toBe("<p>a<br>b\\</p>");
+    expect(markdownToHtml("a\\\nb\\")).toBe("<div>a<br>b\\</div>");
   });
 
   it("decodes character references outside code", () => {
     expect(markdownToHtml("a &#65; &amp; &copy; `&#65;` [x](https://e.test/?a=1&amp;b=2)")).toBe(
-      '<p>a A &amp; &amp;copy; <code>&amp;#65;</code> <a href="https://e.test/?a=1&amp;b=2">x</a></p>',
+      '<div>a A &amp; &amp;copy; <code>&amp;#65;</code> <a href="https://e.test/?a=1&amp;b=2">x</a></div>',
     );
   });
 
   it("reads link addresses with escapes, nested parentheses and titles", () => {
     expect(markdownToHtml("[a](x\\)y) [b](https://e.test/a(b(c))) [c](https://e.test \"Title\")")).toBe(
-      '<p><a href="x)y">a</a> <a href="https://e.test/a(b(c))">b</a> <a href="https://e.test">c</a></p>',
+      '<div><a href="x)y">a</a> <a href="https://e.test/a(b(c))">b</a> <a href="https://e.test">c</a></div>',
     );
   });
 
@@ -128,11 +128,11 @@ describe("markdownToHtml", () => {
 
   it("gives an image back its size, and only a size", () => {
     expect(markdownToHtml("![X](https://e.test/x.png#ajour-image?width=120&style=width%3A50%25)")).toBe(
-      '<p><img src="https://e.test/x.png" alt="X" width="120" style="width:50%"></p>',
+      '<div><img src="https://e.test/x.png" alt="X" width="120" style="width:50%"></div>',
     );
     expect(
       markdownToHtml("![X](https://e.test/x.png#ajour-image?width=1%22onerror%3D%22x&style=background%3Aurl(x))"),
-    ).toBe('<p><img src="https://e.test/x.png" alt="X"></p>');
+    ).toBe('<div><img src="https://e.test/x.png" alt="X"></div>');
   });
 
   it("starts an ordered list where its first number says", () => {

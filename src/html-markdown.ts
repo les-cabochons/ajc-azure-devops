@@ -9,9 +9,13 @@ type HtmlElement = {
   tag: string;
   attrs: Record<string, string>;
   children: HtmlNode[];
+  /** Where the element's tag starts in the HTML. */
+  start: number;
+  /** Where its end tag starts, or where the HTML ends when it has none. */
+  end?: number;
 };
 
-type HtmlNode = { kind: "text"; text: string } | HtmlElement;
+type HtmlNode = { kind: "text"; text: string; start: number } | HtmlElement;
 
 const VOID_TAGS = new Set(["br", "img", "hr", "input", "meta", "link", "col", "area", "base", "wbr", "source"]);
 const DROPPED_TAGS = new Set(["script", "style", "head", "title", "template", "noscript"]);
@@ -426,7 +430,12 @@ export function decodeHtmlEntities(value: string) {
 }
 
 function parseHtml(html: string): HtmlNode[] {
-  const root: HtmlElement = { kind: "element", tag: "#root", attrs: {}, children: [] };
+  const root: HtmlElement = { kind: "element", tag: "#root", attrs: {}, children: [], start: 0 };
+  // Elements closed by `at`, explicitly or by a sibling, end there.
+  const closeTo = (length: number, at: number) => {
+    for (const element of stack.slice(length)) element.end ??= at;
+    stack.length = length;
+  };
   const stack: HtmlElement[] = [root];
   const tokens = /<!--[\s\S]*?-->|<![^>]*>|<\/?[a-zA-Z][^>]*>/g;
   const current = () => stack[stack.length - 1] ?? root;
@@ -434,7 +443,11 @@ function parseHtml(html: string): HtmlNode[] {
   let position = 0;
   for (let match = tokens.exec(html); match; match = tokens.exec(html)) {
     if (match.index > position) {
-      current().children.push({ kind: "text", text: decodeHtmlEntities(html.slice(position, match.index)) });
+      current().children.push({
+        kind: "text",
+        text: decodeHtmlEntities(html.slice(position, match.index)),
+        start: position,
+      });
     }
     position = tokens.lastIndex;
 
@@ -451,7 +464,7 @@ function parseHtml(html: string): HtmlNode[] {
     if (token.startsWith("</")) {
       const index = stack.map((element) => element.tag).lastIndexOf(tag);
       if (index > 0) {
-        stack.length = index;
+        closeTo(index, match.index);
       }
       continue;
     }
@@ -469,7 +482,7 @@ function parseHtml(html: string): HtmlNode[] {
       for (let index = stack.length - 1; index > 0; index -= 1) {
         const open = stack[index]?.tag ?? "";
         if (open === tag || (tag === "td" && open === "th") || (tag === "th" && open === "td")) {
-          stack.length = index;
+          closeTo(index, match.index);
           break;
         }
         if (closes.includes(open)) {
@@ -478,7 +491,13 @@ function parseHtml(html: string): HtmlNode[] {
       }
     }
 
-    const element: HtmlElement = { kind: "element", tag, attrs: parseAttributes(token), children: [] };
+    const element: HtmlElement = {
+      kind: "element",
+      tag,
+      attrs: parseAttributes(token),
+      children: [],
+      start: match.index,
+    };
     noteLosses(element, stack);
     current().children.push(element);
     if (!VOID_TAGS.has(tag) && !token.endsWith("/>")) {
@@ -487,8 +506,9 @@ function parseHtml(html: string): HtmlNode[] {
   }
 
   if (position < html.length) {
-    current().children.push({ kind: "text", text: decodeHtmlEntities(html.slice(position)) });
+    current().children.push({ kind: "text", text: decodeHtmlEntities(html.slice(position)), start: position });
   }
+  closeTo(1, html.length);
   return root.children;
 }
 
@@ -515,41 +535,133 @@ function elementsOf(nodes: HtmlNode[]): HtmlElement[] {
 
 // Lays out a run of inline content and blocks: blocks the editor uses as lines
 // start a new line, paragraph-like blocks stand apart with a blank line.
-function renderFlow(nodes: HtmlNode[]): string {
-  const items: { text: string; paragraph: boolean }[] = [];
+/**
+ * One block of a flow, from its nodes `first` to `last`. `spaced` when an
+ * empty editor line, as `<div><br></div>`, comes before it.
+ */
+interface FlowItem {
+  text: string;
+  paragraph: boolean;
+  spaced: boolean;
+  first: number;
+  last: number;
+}
+
+function flowItems(nodes: HtmlNode[]): FlowItem[] {
+  const items: FlowItem[] = [];
   let inline = "";
-  const flush = () => {
+  let inlineFirst = -1;
+  let spaced = false;
+  const flush = (last: number) => {
     const text = escapeLineStarts(cleanLines(inline));
     if (text.length > 0) {
-      items.push({ text, paragraph: false });
+      items.push({ text, paragraph: false, spaced, first: inlineFirst, last });
+      spaced = false;
     }
     inline = "";
+    inlineFirst = -1;
   };
 
-  for (const node of nodes) {
+  nodes.forEach((node, index) => {
+    if (node.kind === "element" && isBlock(node.tag)) {
+      flush(index - 1);
+      const text = renderBlock(node);
+      if (text.trim().length > 0) {
+        items.push({ text, paragraph: PARAGRAPH_TAGS.has(node.tag), spaced, first: index, last: index });
+        spaced = false;
+      } else if (LINE_TAGS.has(node.tag) && items.length > 0) {
+        // An empty line of the editor sets the lines around it apart.
+        spaced = true;
+      }
+      return;
+    }
+    if (inlineFirst === -1) inlineFirst = index;
     if (node.kind === "text") {
       inline += escapeText(collapseWhitespace(node.text));
     } else if (node.tag === "br") {
       inline += "\n";
-    } else if (isBlock(node.tag)) {
-      flush();
-      const text = renderBlock(node);
-      if (text.trim().length > 0) {
-        items.push({ text, paragraph: PARAGRAPH_TAGS.has(node.tag) });
-      }
     } else {
       inline = joinInline(inline, renderInline(node));
     }
-  }
-  flush();
+  });
+  flush(nodes.length - 1);
+  return items;
+}
 
-  return items
-    .map((item, index) => {
-      const previous = items[index - 1];
-      if (!previous) return item.text;
-      return (previous.paragraph || item.paragraph ? "\n\n" : "\n") + item.text;
-    })
-    .join("");
+/** The separator a flow puts before `item`, after `previous`. */
+function flowSeparator(previous: FlowItem, item: FlowItem) {
+  return previous.paragraph || item.paragraph || item.spaced ? "\n\n" : "\n";
+}
+
+function renderFlow(nodes: HtmlNode[]): string {
+  const items = flowItems(nodes);
+  return items.map((item, index) => (index === 0 ? "" : flowSeparator(items[index - 1]!, item)) + item.text).join("");
+}
+
+/** A top-level block of a description: its Markdown, and the HTML it came from. */
+export interface MarkdownPart {
+  markdown: string;
+  html: string;
+  /** Plain lines, which may sit right beside other lines; otherwise a block. */
+  line: boolean;
+}
+
+/**
+ * A description's Markdown, block by block, each with the HTML it came from:
+ * `html` is `prefix`, then each part with `gaps[i]` before part i + 1, then
+ * `suffix`, and the Markdown joins the parts with `separators`. A write can
+ * keep the HTML of every block the user did not change. Undefined when the
+ * blocks do not join into the description's Markdown.
+ */
+export function htmlToMarkdownParts(html: string):
+  | { prefix: string; suffix: string; parts: MarkdownPart[]; gaps: string[]; separators: string[] }
+  | undefined {
+  const previous = losses;
+  losses = new Set();
+  try {
+    let nodes = parseHtml(html);
+    let end = html.length;
+    // A description wrapped whole in one line block is its content.
+    for (;;) {
+      const content = nodes.filter((node) => node.kind === "element" || node.text.trim().length > 0);
+      const only = content[0];
+      // Only a wrapper of blocks: a single line is a block itself, and new
+      // lines written into it would nest deeper on every edit.
+      if (
+        content.length !== 1 ||
+        only?.kind !== "element" ||
+        !LINE_TAGS.has(only.tag) ||
+        !only.children.some((child) => child.kind === "element" && isBlock(child.tag))
+      ) {
+        break;
+      }
+      nodes = only.children;
+      end = only.end ?? end;
+    }
+    const items = flowItems(nodes);
+    if (items.length === 0) return undefined;
+    const startOf = (index: number) => nodes[index]!.start;
+    const endOf = (index: number) => nodes[index + 1]?.start ?? end;
+    const parts = items.map((item) => ({
+      markdown: item.text,
+      html: html.slice(startOf(item.first), endOf(item.last)),
+      line: !item.paragraph && !/^(?:[-*+] |\d+[.)] |>|`{3}|~{3}|\||#| {4})/m.test(item.text),
+    }));
+    const gaps = items.slice(1).map((item, index) => html.slice(endOf(items[index]!.last), startOf(item.first)));
+    const separators = items.slice(1).map((item, index) => flowSeparator(items[index]!, item));
+    const joined = parts.map((part, index) => (index === 0 ? "" : separators[index - 1]) + part.markdown).join("");
+    const whole = renderFlow(parseHtml(html)).replace(/\n{3,}/g, "\n\n").trim();
+    if (joined !== whole) return undefined;
+    return {
+      prefix: html.slice(0, startOf(items[0]!.first)),
+      suffix: html.slice(endOf(items[items.length - 1]!.last)),
+      parts,
+      gaps,
+      separators,
+    };
+  } finally {
+    losses = previous;
+  }
 }
 
 function renderBlock(element: HtmlElement): string {

@@ -114,6 +114,13 @@ write):
   and answers `conflict` with the current description. If the text is the
   same but now cut or lossy, as after a colleague added formatting, it writes
   nothing and says why.
+- An HTML description keeps the HTML of every block the edit leaves alone,
+  exactly as it was: its empty editor lines, spacing and markup stay. Only
+  changed or new blocks are written from the Markdown, as editor lines (one
+  `<div>` per paragraph, an empty `<div><br></div>` between paragraphs). The
+  reader shows an empty editor line between lines as a blank line, so the
+  Markdown and the editor agree. If the kept blocks cannot read back as the
+  edit, the whole Markdown is written instead.
 - An item that stores its description as Markdown gets Markdown, with
   mentions outside code as `@<identity id>`. Any other gets HTML from a dependency-free
   converter for the Markdown above and the CommonMark people type: headings,

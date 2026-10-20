@@ -239,15 +239,31 @@ function isEscapedAt(text: string, index: number) {
 }
 
 function renderBlocks(blocks: Block[], inItem: boolean): string {
-  return blocks.map((block) => renderBlock(block, inItem)).join("");
+  return blocks
+    .map((block, index) => {
+      // Two paragraphs stand apart by an empty line, as Azure DevOps' editor
+      // writes one; other blocks have their own spacing.
+      const spaced = !inItem && block.kind === "paragraph" && blocks[index - 1]?.kind === "paragraph";
+      return (spaced ? "<div><br></div>" : "") + renderBlock(block, inItem);
+    })
+    .join("");
+}
+
+/** Whether Markdown starts and ends with a paragraph, rather than another block. */
+export function markdownTextEdges(markdown: string) {
+  const blocks = parseBlocks(markdown.replace(/\r\n?/g, "\n").split("\n"));
+  return {
+    first: blocks[0]?.kind === "paragraph",
+    last: blocks[blocks.length - 1]?.kind === "paragraph",
+  };
 }
 
 function renderBlock(block: Block, inItem: boolean): string {
   switch (block.kind) {
     case "paragraph": {
       const html = renderLines(block.lines);
-      // In a list item a paragraph is one of its lines.
-      return inItem ? `<div>${html}</div>` : `<p>${html}</p>`;
+      // A paragraph is a line of the editor, its breaks inside it.
+      return `<div>${html}</div>`;
     }
     case "heading":
       return `<h${block.level}>${renderInline(block.text.trim())}</h${block.level}>`;

@@ -10,6 +10,7 @@ import type {
   BacklogWriteDescriptionResult,
 } from "./contract.js";
 import { describeWorkItem, isMarkdownField } from "./description.js";
+import { patchDescriptionHtml } from "./description-patch.js";
 import { markdownToHtml } from "./markdown-html.js";
 
 /** The longest description Azure DevOps takes, as it measures: the stored HTML or Markdown. */
@@ -65,7 +66,12 @@ export async function writeAzureDescription(
   }
 
   const markdown = isMarkdownField(workItem, "System.Description");
-  const value = markdown ? toAzureMarkdown(request.text) : markdownToHtml(request.text);
+  const source = workItem.fields?.["System.Description"];
+  // An HTML description keeps the HTML of every block the user left alone.
+  const value = markdown
+    ? toAzureMarkdown(request.text)
+    : ((typeof source === "string" ? patchDescriptionHtml(source, request.text) : undefined) ??
+      markdownToHtml(request.text));
   if (value.length > AZURE_DESCRIPTION_MAX_LENGTH) {
     throw new Error(
       `This description is too long for Azure DevOps: ${value.length.toLocaleString("en-US")} of ${AZURE_DESCRIPTION_MAX_LENGTH.toLocaleString("en-US")} characters once converted.`,

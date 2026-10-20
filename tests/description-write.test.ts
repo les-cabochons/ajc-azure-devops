@@ -99,10 +99,27 @@ describe("writeDescription", () => {
         {
           op: "add",
           path: "/fields/System.Description",
-          value: `<p>New <strong>plan</strong>, ask <a href="#" data-vss-mention="version:2.0,${ANA}">@Ana Silva</a></p>`,
+          value: `<div>New <strong>plan</strong>, ask <a href="#" data-vss-mention="version:2.0,${ANA}">@Ana Silva</a></div>`,
         },
       ],
     ]);
+  });
+
+  it("keeps the HTML of the lines and empty lines the edit leaves alone", async () => {
+    const html = "<div>Goal</div><div><br></div><div><br></div><div>Steps</div><ul><li>One</li></ul>";
+    const item = { rev: 5, description: html };
+    const patches = stubAzure(item);
+
+    await writeDescription(connection, {
+      sourceId: SOURCE_ID,
+      text: "Goal\n\nNew steps\n- One",
+      expected: "Goal\n\nSteps\n- One",
+    });
+    expect(patches[0]![1]).toEqual({
+      op: "add",
+      path: "/fields/System.Description",
+      value: html.replace("<div>Steps</div>", "<div>New steps</div>"),
+    });
   });
 
   it("writes a Markdown item's description as Markdown, with its mentions", async () => {
@@ -164,7 +181,7 @@ describe("writeDescription", () => {
 
     await expect(
       writeDescription(connection, { sourceId: SOURCE_ID, text: long, expected: "Old plan" }),
-    ).rejects.toThrow("too long for Azure DevOps: 1,000,011 of 1,000,000 characters once converted");
+    ).rejects.toThrow("too long for Azure DevOps: 1,000,015 of 1,000,000 characters once converted");
     expect(patches).toEqual([]);
   });
 
