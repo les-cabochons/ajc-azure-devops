@@ -672,7 +672,14 @@ export function htmlToMarkdownParts(html: string):
  * spaces included, as Ajour trims the end of a description.
  */
 function finishMarkdown(text: string) {
-  return text.replace(/\n{3,}/g, "\n\n").replace(/^[ \t\n\r\f]+/, "").trimEnd();
+  const collapsed = text.replace(/\n{3,}/g, "\n\n");
+  // More than one empty line in a row, and spaces kept at the very end, have
+  // no place in the Markdown: a write would drop them.
+  if (collapsed !== text) lose("extra blank lines");
+  const started = collapsed.replace(/^[ \t\n\r\f]+/, "");
+  const finished = started.trimEnd();
+  if (started.slice(finished.length).includes(" ")) lose("spaces at the end");
+  return finished;
 }
 
 /** A part's Markdown as `finishMarkdown` leaves it in the whole description. */
@@ -763,7 +770,7 @@ function renderListItem(item: HtmlElement): string {
   const items = flowItems(item.children);
   const children = elementsOf(item.children);
   if (
-    items.some((entry) => entry.spaced) ||
+    items.some((entry) => entry.spaced || /\n[ \t]*\n/.test(entry.text)) ||
     children.some((child, index) => child.tag === "p" && children[index + 1]?.tag === "p")
   ) {
     lose("blank lines in list items");

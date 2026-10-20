@@ -300,6 +300,19 @@ describe("what a conversion loses", () => {
     expect(lost("<ul><li>A<ul><li>Nested</li></ul></li><li><div>B</div><div>C</div></li></ul>")).toEqual([]);
   });
 
+  it("names spacing the Markdown has no place for", () => {
+    // More than one empty line in a row, from line breaks.
+    expect(lost("<div>A<br><br><br>B</div><div>C</div>")).toEqual(["extra blank lines"]);
+    // Non-breaking spaces at the very end, which Ajour trims.
+    expect(lost("<div>A<br>B&nbsp;&nbsp;</div>")).toEqual(["spaces at the end"]);
+    expect(lost("<div>A&nbsp;&nbsp;</div><div>B</div>")).toEqual([]);
+    // An empty line inside a list item, from breaks or nested paragraphs.
+    expect(lost("<ul><li>A<br><br>B</li><li>C</li></ul>")).toEqual(["blank lines in list items"]);
+    expect(lost("<ul><li><div><p>A</p><p>B</p></div></li></ul>")).toEqual(["blank lines in list items"]);
+    // Ordinary editor spacing stays editable.
+    expect(lost("<div>A</div><div><br></div><div><br></div><div>B</div>")).toEqual([]);
+  });
+
   it("names formatting anywhere inside a mention", () => {
     expect(
       lost(
@@ -370,9 +383,9 @@ describe("what a conversion loses", () => {
   });
 
   it("names blank lines in code that the Markdown cannot keep", () => {
-    expect(lost("<pre>line 1\n\n\nline 2</pre>")).toEqual(["blank lines in code"]);
+    expect(lost("<pre>line 1\n\n\nline 2</pre>")).toContain("blank lines in code");
     expect(lost("<pre>line 1\n\nline 2</pre>")).toEqual([]);
-    expect(lost("<ul><li>Run<pre>a\n\nb</pre></li></ul>")).toEqual(["blank lines in code"]);
+    expect(lost("<ul><li>Run<pre>a\n\nb</pre></li></ul>")).toContain("blank lines in code");
   });
 
   it("names plain text set inside emphasis, which the Markdown would emphasize", () => {
