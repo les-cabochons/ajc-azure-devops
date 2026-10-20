@@ -279,6 +279,24 @@ describe("what a conversion loses", () => {
     expect(htmlToMarkdownWithLosses("<div>a_<i>b</i></div>").markdown).toBe("a\\__b_");
   });
 
+  it("joins emphasis after an escaped backslash", () => {
+    expect(htmlToMarkdownWithLosses("<div><b>C:\\</b><b>Windows</b></div>").markdown).toBe(
+      "**C:\\\\Windows**",
+    );
+  });
+
+  it("keeps a link's styled emphasis inside its text", () => {
+    expect(
+      htmlToMarkdownWithLosses(
+        '<a href="https://example.test/runbook" style="text-decoration:line-through">Old runbook</a>',
+      ),
+    ).toEqual({ markdown: "[~~Old runbook~~](https://example.test/runbook)", lost: [] });
+  });
+
+  it("names emphasis set on code, which code cannot carry", () => {
+    expect(lost('<code style="font-weight:bold">npm test</code>')).toEqual(["emphasis on code"]);
+  });
+
   it("names each loss once", () => {
     expect(lost('<u>a</u><u>b</u><span style="color:red">c</span>')).toEqual(["underline", "text colour"]);
   });

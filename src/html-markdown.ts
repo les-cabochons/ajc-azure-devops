@@ -96,6 +96,13 @@ function renderEmphasized(element: HtmlElement, tagEmphasis: Emphasis | undefine
   return text;
 }
 
+/** Whether the character at `index` is escaped: an odd run of backslashes before it. */
+function isEscaped(text: string, index: number) {
+  let backslashes = 0;
+  for (let at = index - 1; at >= 0 && text[at] === "\\"; at -= 1) backslashes += 1;
+  return backslashes % 2 === 1;
+}
+
 /**
  * Joins two runs of inline Markdown. Where one run's emphasis ends right as
  * the next run's same emphasis starts, as in two bold spans side by side,
@@ -111,7 +118,7 @@ function joinInline(left: string, right: string): string {
         joinedLeft.endsWith(marker) &&
         joinedRight.startsWith(marker) &&
         joinedLeft.length > marker.length &&
-        joinedLeft[joinedLeft.length - marker.length - 1] !== "\\"
+        !isEscaped(joinedLeft, joinedLeft.length - marker.length)
       ) {
         joinedLeft = joinedLeft.slice(0, -marker.length);
         joinedRight = joinedRight.slice(marker.length);
@@ -159,6 +166,11 @@ function noteLosses(element: HtmlElement) {
     if (emphasis.bold) lose("bold text");
     if (emphasis.italic) lose("italic text");
     if (emphasis.strike) lose("strikethrough text");
+  }
+  if (CODE_TAGS.has(element.tag)) {
+    // Code keeps its text as written, so emphasis set on it is lost.
+    const emphasis = styledEmphasis(element);
+    if (emphasis.bold || emphasis.italic || emphasis.strike) lose("emphasis on code");
   }
   if (element.tag === "sup") lose("superscript");
   if (element.tag === "sub") lose("subscript");
@@ -462,7 +474,8 @@ function renderInline(element: HtmlElement): string {
         const name = textContent(element).trim().replace(/^@/, "").replace(/[[\]\\]/g, "");
         return `[@${name || "someone"}](mention:${mention[1]!.toLowerCase()})`;
       }
-      const text = renderInlineChildren(element.children);
+      // A link's own style, such as a struck-out old link, goes inside its text.
+      const text = renderEmphasized(element, undefined);
       const href = element.attrs.href?.trim();
       if (!href || text.trim().length === 0) return text;
       return `[${text.trim()}](${encodeUrl(href)})`;
