@@ -469,6 +469,12 @@ describe("what a conversion loses", () => {
     expect(lost("<div><code>A</code><code>B</code></div>")).toEqual(["other formatting"]);
   });
 
+  it("names code with a backtick at one edge and a space at the other", () => {
+    expect(lost("<div><code>`A </code>B</div>")).toEqual(["other formatting"]);
+    expect(lost("<div><code> B`</code></div>")).toEqual(["other formatting"]);
+    expect(htmlToMarkdownWithLosses("<div><code>`A`</code></div>")).toEqual({ markdown: "`` `A` ``", lost: [] });
+  });
+
   it("joins italic beside bold italic, and escapes a ! that joining brings before a link", () => {
     expect(htmlToMarkdownWithLosses("<div><b><i>A</i></b><i>B</i></div>")).toEqual({ markdown: "***A**B*", lost: [] });
     expect(htmlToMarkdownWithLosses("<div><i>A</i><b><i>B</i></b></div>")).toEqual({ markdown: "*A**B***", lost: [] });

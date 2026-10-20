@@ -1054,6 +1054,8 @@ function renderCodeSpan(code: string): string {
   }
   const fence = "`".repeat(longestRun(text, "`") + 1);
   const padding = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  // A space at the code's edge would join the padding and go with it.
+  if (padding && (text.startsWith(" ") || text.endsWith(" "))) lose("other formatting");
   return `${fence}${padding}${text}${padding}${fence}`;
 }
 
