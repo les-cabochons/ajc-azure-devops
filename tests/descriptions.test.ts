@@ -175,7 +175,7 @@ describe("descriptions Ajour cannot write back as they are", () => {
   });
 
   it("names a description whose Markdown would not write back as itself", async () => {
-    const candidate = await candidateFor("<div>a<i>x</i>b</div>");
+    const candidate = await candidateFor("<div>a<b>!</b>b</div>");
 
     expect(candidate.description?.lost).toEqual(["formatting Ajour cannot write back"]);
   });
@@ -460,6 +460,15 @@ describe("what a conversion loses", () => {
     expect(lost("<div><div>A</div><div><br></div><div><br></div><div>Else</div></div>")).toEqual([]);
   });
 
+  it("keeps text that looks like a reference or an autolink, italics inside a word, and names joined code spans", () => {
+    expect(htmlToMarkdownWithLosses("<div>Use &amp;amp; and &lt;https://e.test&gt;</div>")).toEqual({
+      markdown: "Use \\&amp; and \\<https://e.test>",
+      lost: [],
+    });
+    expect(htmlToMarkdownWithLosses("<div>un<i>break</i>able</div>")).toEqual({ markdown: "un*break*able", lost: [] });
+    expect(lost("<div><code>A</code><code>B</code></div>")).toEqual(["other formatting"]);
+  });
+
   it("escapes a ! right before a link, and names a code block of spaces alone", () => {
     expect(htmlToMarkdownWithLosses('<div>!<a href="https://e.test">Reference</a> Wow!</div>')).toEqual({
       markdown: "\\![Reference](https://e.test) Wow!",
@@ -579,24 +588,24 @@ describe("what a conversion loses", () => {
         '<div><span style="font-weight: bold">Warning</span>, <span style="font-style:italic">soon</span>, ' +
           '<span style="text-decoration: line-through">never</span></div>',
       ),
-    ).toEqual({ markdown: "**Warning**, _soon_, ~~never~~", lost: [] });
+    ).toEqual({ markdown: "**Warning**, *soon*, ~~never~~", lost: [] });
   });
 
   it("applies emphasis once, however the HTML nests or repeats it", () => {
     const convert = (html: string) => htmlToMarkdownWithLosses(html);
     expect(convert('<span style="font-style:italic"><i>Warning</i></span>')).toEqual({
-      markdown: "_Warning_",
+      markdown: "*Warning*",
       lost: [],
     });
     expect(convert('<b style="font-style:italic">Warning</b>')).toEqual({
-      markdown: "**_Warning_**",
+      markdown: "***Warning***",
       lost: [],
     });
     expect(
       convert('<div><span style="font-weight:bold">Warning</span><span style="font-weight:bold">now</span></div>'),
     ).toEqual({ markdown: "**Warningnow**", lost: [] });
     expect(convert("<div><b>One</b><b>Two</b> and <i>three</i><i>four</i></div>")).toEqual({
-      markdown: "**OneTwo** and _threefour_",
+      markdown: "**OneTwo** and *threefour*",
       lost: [],
     });
     expect(convert("<div><b>Bold</b> <b>apart</b></div>")).toEqual({
@@ -611,7 +620,7 @@ describe("what a conversion loses", () => {
   });
 
   it("keeps an escaped character beside emphasis", () => {
-    expect(htmlToMarkdownWithLosses("<div>a_<i>b</i></div>").markdown).toBe("a\\__b_");
+    expect(htmlToMarkdownWithLosses("<div>a_<i>b</i></div>").markdown).toBe("a\\_*b*");
   });
 
   it("joins emphasis after an escaped backslash", () => {

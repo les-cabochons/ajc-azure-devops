@@ -20,7 +20,7 @@ describe("htmlToMarkdown", () => {
       htmlToMarkdown(
         '<div><b>bold </b><i>italic</i> <s>gone</s> <code>a()</code> <a href="https://example.com/a b">the spec</a> <u>under</u></div>',
       ),
-    ).toBe("**bold** _italic_ ~~gone~~ `a()` [the spec](https://example.com/a%20b) under");
+    ).toBe("**bold** *italic* ~~gone~~ `a()` [the spec](https://example.com/a%20b) under");
   });
 
   it("escapes characters markdown would read as syntax", () => {

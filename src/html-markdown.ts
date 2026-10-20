@@ -72,7 +72,8 @@ const EMPTY_COLOUR_VALUES = new Set(["", "inherit", "initial", "unset", "current
 const CODE_TAGS = new Set(["pre", "code", "kbd", "samp", "tt"]);
 
 type Emphasis = "bold" | "italic" | "strike";
-const EMPHASIS_MARKERS: Record<Emphasis, string> = { bold: "**", italic: "_", strike: "~~" };
+// Italic is `*`, which, unlike `_`, also works inside a word.
+const EMPHASIS_MARKERS: Record<Emphasis, string> = { bold: "**", italic: "*", strike: "~~" };
 
 /**
  * The emphasis the content being rendered already has, so nested emphasis,
@@ -109,6 +110,14 @@ function renderEmphasized(
   return text;
 }
 
+function starsAtEnd(text: string) {
+  return /\**$/.exec(text)![0].length;
+}
+
+function starsAtStart(text: string) {
+  return /^\**/.exec(text)![0].length;
+}
+
 /** Whether the character at `index` is escaped: an odd run of backslashes before it. */
 function isEscaped(text: string, index: number) {
   let backslashes = 0;
@@ -128,14 +137,20 @@ function joinInline(left: string, right: string): string {
   if (joinedRight.startsWith("[") && joinedLeft.endsWith("!") && !isEscaped(joinedLeft, joinedLeft.length - 1)) {
     joinedLeft = `${joinedLeft.slice(0, -1)}\\!`;
   }
+  // Two code spans side by side would join their backticks into one fence.
+  if (joinedLeft.endsWith("`") && joinedRight.startsWith("`") && !isEscaped(joinedLeft, joinedLeft.length - 1)) {
+    lose("other formatting");
+  }
   for (let merged = true; merged; ) {
     merged = false;
-    for (const marker of ["**", "~~", "_"]) {
+    for (const marker of ["**", "~~", "*"]) {
       if (
         joinedLeft.endsWith(marker) &&
         joinedRight.startsWith(marker) &&
         joinedLeft.length > marker.length &&
-        !isEscaped(joinedLeft, joinedLeft.length - marker.length)
+        !isEscaped(joinedLeft, joinedLeft.length - marker.length) &&
+        // A lone `*` is italic only where the stars on both sides are one.
+        (marker !== "*" || (starsAtEnd(joinedLeft) === 1 && starsAtStart(joinedRight) === 1))
       ) {
         joinedLeft = joinedLeft.slice(0, -marker.length);
         joinedRight = joinedRight.slice(marker.length);
@@ -1075,7 +1090,10 @@ function cleanLines(text: string): string {
 }
 
 function escapeText(text: string): string {
-  return text.replace(/[\\`*_[\]~|]/g, "\\$&");
+  return text
+    .replace(/[\\`*_[\]~|]/g, "\\$&")
+    .replace(/&(?=#[0-9]{1,7};|#[xX][0-9a-fA-F]{1,6};|[a-zA-Z][a-zA-Z0-9]{1,31};)/g, "\\&")
+    .replace(/<(?=[a-zA-Z][a-zA-Z0-9+.-]{1,31}:[^\s<>]*>)/g, "\\<");
 }
 
 // Text that starts a line with "#", ">", "- ", "+ ", "1. " or a run of "-" or
