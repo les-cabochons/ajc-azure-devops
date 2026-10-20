@@ -267,7 +267,55 @@ describe("what a conversion loses", () => {
     expect(lost('<table border="1"><tr><td>Production</td></tr></table>')).toEqual(["other formatting"]);
     expect(lost('<span style="font-weight: bold !important">Warning</span>')).toEqual(["other formatting"]);
     expect(lost('<b style="font-weight: bold; font-weight: normal">Plain</b>')).toContain("other formatting");
-    expect(lost('<div class="x" id="y" lang="en" data-foo="1"><a href="https://e.test" target="_blank">ok</a></div>')).toEqual(
+    expect(lost('<div class="x" lang="en" data-foo="1"><a href="https://e.test" target="_blank">ok</a></div>')).toEqual(
+      [],
+    );
+    // An in-page link may point at an id or a named anchor.
+    expect(lost('<a href="#target">Go</a><div id="target">Target</div>')).toEqual(["other formatting"]);
+    expect(lost('<a name="target">Target</a>')).toEqual(["other formatting"]);
+  });
+
+  it("checks each named style's value, not only its name", () => {
+    expect(lost('<p style="text-align: end">Right side</p>')).toEqual(["text alignment"]);
+    expect(lost('<p style="text-align: left">Left</p>')).toEqual([]);
+    expect(lost('<span style="color: transparent">Hidden</span>')).toEqual(["text colour"]);
+    expect(lost('<span style="color: inherit">Plain</span>')).toEqual([]);
+    expect(lost('<pre style="font-size: 48px">Large code</pre>')).toEqual(["font"]);
+    expect(lost('<pre style="font-family: Consolas">Code</pre>')).toEqual([]);
+    expect(lost('<span style="text-decoration: line-through; text-decoration-line: none">Current</span>')).toContain(
+      "other formatting",
+    );
+  });
+
+  it("names plain text in a heading, which is bold by default", () => {
+    expect(lost('<h1><span style="font-weight: normal">Plain heading</span></h1>')).toEqual([
+      "plain text inside emphasis",
+    ]);
+  });
+
+  it("names merged cells at any span but one, and formatting in a mention", () => {
+    expect(lost('<table><tr><td rowspan="0">A</td><td>B</td></tr><tr><td>C</td></tr></table>')).toEqual([
+      "merged table cells",
+    ]);
+    expect(
+      lost('<a href="#" data-vss-mention="version:2.0,0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"><b>@Ana</b></a>'),
+    ).toEqual(["other formatting"]);
+  });
+
+  it("keeps the spaces at a link's edges as text", () => {
+    expect(htmlToMarkdownWithLosses('<div><a href="https://e.test">Link </a>after</div>')).toEqual({
+      markdown: "[Link](https://e.test) after",
+      lost: [],
+    });
+  });
+
+  it("judges a list marker by how deep its list is", () => {
+    expect(lost('<ul><li>A<ul style="list-style-type: disc"><li>B</li></ul></li></ul>')).toEqual([
+      "list numbering style",
+    ]);
+    expect(lost('<ul><li>A<ul style="list-style-type: circle"><li>B</li></ul></li></ul>')).toEqual([]);
+    expect(lost('<div style="list-style-type: square"><ul><li>A</li></ul></div>')).toEqual(["list numbering style"]);
+    expect(lost('<ul><li style="list-style-type: disc">A</li></ul><ol><li style="list-style-type: decimal">B</li></ol>')).toEqual(
       [],
     );
   });

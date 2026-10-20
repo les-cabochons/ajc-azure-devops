@@ -64,6 +64,7 @@ function lose(what: string) {
 }
 
 const EMPTY_STYLE_VALUES = new Set(["", "inherit", "initial", "unset", "transparent", "none"]);
+const EMPTY_COLOUR_VALUES = new Set(["", "inherit", "initial", "unset", "currentcolor"]);
 const CODE_TAGS = new Set(["pre", "code", "kbd", "samp", "tt"]);
 
 type Emphasis = "bold" | "italic" | "strike";
@@ -74,6 +75,9 @@ const EMPHASIS_MARKERS: Record<Emphasis, string> = { bold: "**", italic: "_", st
  * as `<span style="font-style:italic"><i>x</i></span>`, is applied once.
  */
 const activeEmphasis: Record<Emphasis, number> = { bold: 0, italic: 0, strike: 0 };
+
+/** How many headings, bold by default, the content being rendered is in. */
+let headingDepth = 0;
 
 /** Renders an element's content with its tag's and its style's emphasis. */
 function renderEmphasized(
@@ -146,7 +150,8 @@ function noteEmphasisResets(element: HtmlElement, tagEmphasis: Emphasis | undefi
   // `initial` is the normal weight and style, so it turns emphasis off.
   const inherited = (value: string) => ["inherit", "unset"].includes(value);
   // Emphasis around it, or the element's own tag, as `<b style="font-weight:normal">`.
-  const has = (kind: Emphasis) => activeEmphasis[kind] > 0 || tagEmphasis === kind;
+  const has = (kind: Emphasis) =>
+    activeEmphasis[kind] > 0 || tagEmphasis === kind || (kind === "bold" && headingDepth > 0);
   const styled = styledEmphasis(element);
   if (
     (weight && !inherited(weight) && has("bold") && !styled.bold) ||
@@ -169,22 +174,24 @@ function styledEmphasis(element: HtmlElement) {
 }
 
 /** Notes what an element's styling or attributes carry that Markdown cannot. */
-function noteLosses(element: HtmlElement) {
+function noteLosses(element: HtmlElement, ancestors: HtmlElement[]) {
   const declarations = new Map<string, string>();
   for (const declaration of (element.attrs.style ?? "").toLowerCase().split(";")) {
     const colon = declaration.indexOf(":");
     if (colon > 0) declarations.set(declaration.slice(0, colon).trim(), declaration.slice(colon + 1).trim());
   }
-  const has = (name: string) => {
+  const has = (name: string, empty = EMPTY_STYLE_VALUES) => {
     const value = declarations.get(name);
-    return value !== undefined && !EMPTY_STYLE_VALUES.has(value);
+    return value !== undefined && !empty.has(value);
   };
-  if (has("color") || (element.tag === "font" && element.attrs.color)) lose("text colour");
+  // A transparent colour hides the text, so only the inherited one is no colour.
+  if (has("color", EMPTY_COLOUR_VALUES) || (element.tag === "font" && element.attrs.color)) lose("text colour");
   if (has("background-color") || has("background")) lose("highlight");
-  // Code keeps its own font as a code span or block, so its font is not lost.
+  // Code keeps its own font family as a code span or block, but not its size.
   if (
-    !CODE_TAGS.has(element.tag) &&
-    (has("font-family") || has("font-size") || (element.tag === "font" && (element.attrs.face || element.attrs.size)))
+    (has("font-family") && !CODE_TAGS.has(element.tag)) ||
+    has("font-size") ||
+    (element.tag === "font" && (element.attrs.face || element.attrs.size))
   ) {
     lose("font");
   }
@@ -202,7 +209,13 @@ function noteLosses(element: HtmlElement) {
   }
   // Markdown tables have no header cells of their own; the write gives none.
   if (element.tag === "th" || element.tag === "thead") lose("table header cells");
-  if (["ol", "ul", "li"].includes(element.tag)) noteListLosses(element, declarations);
+  if (
+    ["ol", "ul", "li"].includes(element.tag) ||
+    declarations.has("list-style-type") ||
+    declarations.has("list-style")
+  ) {
+    noteListLosses(element, declarations, ancestors);
+  }
   if (element.tag === "img") noteImageLosses(element);
   if (element.tag === "sup") lose("superscript");
   if (element.tag === "sub") lose("subscript");
@@ -210,12 +223,12 @@ function noteLosses(element: HtmlElement) {
   const decoration = declarations.get("text-decoration") ?? declarations.get("text-decoration-line") ?? "";
   if (element.tag === "u" || element.tag === "ins" || decoration.includes("underline")) lose("underline");
   const alignment = declarations.get("text-align") ?? element.attrs.align?.toLowerCase() ?? "";
-  if (["center", "right", "justify"].includes(alignment)) lose("text alignment");
+  if (!["", "left", "start", "inherit", "initial", "unset"].includes(alignment)) lose("text alignment");
   if (element.tag === "input" && (element.attrs.type ?? "").toLowerCase() === "checkbox") lose("checkboxes");
   if (["iframe", "video", "audio", "object", "embed"].includes(element.tag)) lose("embedded content");
   if (
     (element.tag === "td" || element.tag === "th") &&
-    (Number(element.attrs.colspan ?? 1) > 1 || Number(element.attrs.rowspan ?? 1) > 1)
+    ((element.attrs.colspan ?? "1").trim() !== "1" || (element.attrs.rowspan ?? "1").trim() !== "1")
   ) {
     lose("merged table cells");
   }
@@ -232,11 +245,11 @@ const KNOWN_TAGS = new Set([
 ]);
 
 /** Attributes that change nothing a reader sees. */
-const NEUTRAL_ATTRIBUTE = /^(?:id|class|lang|title|role|data-[\w-]+|aria-[\w-]+)$/;
+const NEUTRAL_ATTRIBUTE = /^(?:class|lang|title|role|data-[\w-]+|aria-[\w-]+)$/;
 
 /** The attributes each tag may carry, read or named as lost elsewhere. */
 const TAG_ATTRIBUTES: Record<string, string[]> = {
-  a: ["href", "target", "rel", "name", "data-vss-mention"],
+  a: ["href", "target", "rel", "data-vss-mention"],
   img: ["src", "alt", "width", "height"],
   ol: ["start", "type", "reversed"],
   li: ["value"],
@@ -282,7 +295,10 @@ function noteUnknownFormatting(element: HtmlElement) {
     const colon = declaration.indexOf(":");
     const name = (colon > 0 ? declaration.slice(0, colon) : declaration).trim().toLowerCase();
     const value = colon > 0 ? declaration.slice(colon + 1).trim().toLowerCase() : "";
-    const repeated = seen.has(name) && seen.get(name) !== value;
+    const repeated =
+      (seen.has(name) && seen.get(name) !== value) ||
+      (name === "text-decoration" && seen.has("text-decoration-line")) ||
+      (name === "text-decoration-line" && seen.has("text-decoration"));
     seen.set(name, value);
     if (
       repeated ||
@@ -350,15 +366,19 @@ function noteImageLosses(element: HtmlElement) {
 }
 
 /** Notes numbering or markers a list or item sets that Markdown lists cannot. */
-function noteListLosses(element: HtmlElement, declarations: Map<string, string>) {
+function noteListLosses(element: HtmlElement, declarations: Map<string, string>, ancestors: HtmlElement[]) {
   const type = declarations.get("list-style-type");
   const shorthand = declarations.get("list-style");
-  // A list keeps only its own default marker; an item's marker follows its list.
+  // The marker a browser gives the list by default: bullets change with how
+  // deep the list is nested; an item takes its list's.
+  const lists = ancestors.filter((ancestor) => ancestor.tag === "ul" || ancestor.tag === "ol");
+  const list = element.tag === "li" ? lists[lists.length - 1] : element;
+  const depth = element.tag === "li" ? lists.length - 1 : lists.length;
+  const marker =
+    list?.tag === "ol" ? "decimal" : list?.tag === "ul" ? (["disc", "circle"][depth] ?? "square") : undefined;
+  // Only a list or item may set a marker, and only the one it has anyway.
   const plain = (value: string | undefined) =>
-    value === undefined ||
-    value === "inherit" ||
-    (element.tag === "ul" && value === "disc") ||
-    (element.tag === "ol" && value === "decimal");
+    value === undefined || (marker !== undefined && (value === marker || (element.tag === "li" && value === "inherit")));
   const start = element.attrs.start;
   if (
     !plain(type) ||
@@ -459,7 +479,7 @@ function parseHtml(html: string): HtmlNode[] {
     }
 
     const element: HtmlElement = { kind: "element", tag, attrs: parseAttributes(token), children: [] };
-    noteLosses(element);
+    noteLosses(element, stack);
     current().children.push(element);
     if (!VOID_TAGS.has(tag) && !token.endsWith("/>")) {
       stack.push(element);
@@ -540,7 +560,13 @@ function renderBlock(element: HtmlElement): string {
     case "h4":
     case "h5":
     case "h6": {
-      const text = singleLine(renderFlow(element.children));
+      headingDepth += 1;
+      let text: string;
+      try {
+        text = singleLine(renderFlow(element.children));
+      } finally {
+        headingDepth -= 1;
+      }
       return text ? `${"#".repeat(Number(element.tag[1]))} ${text}` : "";
     }
     case "ul":
@@ -694,6 +720,9 @@ function renderInline(element: HtmlElement): string {
       // An Azure DevOps mention, as Ajour writes one.
       const mention = /^version:[\d.]+,([0-9a-f-]{36})$/i.exec(element.attrs["data-vss-mention"] ?? "");
       if (mention) {
+        if (elementsOf(element.children).some((child) => child.tag !== "span" || child.attrs.style)) {
+          lose("other formatting");
+        }
         const name = textContent(element).trim().replace(/^@/, "").replace(/[[\]\\]/g, "");
         return `[@${name || "someone"}](mention:${mention[1]!.toLowerCase()})`;
       }
@@ -701,7 +730,9 @@ function renderInline(element: HtmlElement): string {
       const text = renderEmphasized(element, undefined);
       const href = element.attrs.href?.trim();
       if (!href || text.trim().length === 0) return text;
-      return `[${text.trim()}](${encodeUrl(href)})`;
+      // The spaces at the link's edges stay text beside it.
+      const [, before = "", label = "", after = ""] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text) ?? [];
+      return `${before}[${label}](${encodeUrl(href)})${after}`;
     }
     case "img": {
       const src = element.attrs.src?.trim();
