@@ -453,6 +453,13 @@ describe("what a conversion loses", () => {
     expect(lost("<div><s>A</s> X <b>bold </b>Y</div>")).toEqual([]);
   });
 
+  it("names struck-through or code spaces alone, and reads a wrapper's spacing as the top level's", () => {
+    expect(lost("<div>A<s>&nbsp;&nbsp;</s>B</div>")).toEqual(["strikethrough on spaces"]);
+    expect(lost("<div>A<code>&nbsp;&nbsp;</code>B</div>")).toEqual(["other formatting"]);
+    // A write keeps a wrapper of blocks around what it changes, with its empty lines.
+    expect(lost("<div><div>A</div><div><br></div><div><br></div><div>Else</div></div>")).toEqual([]);
+  });
+
   it("names emphasis turned off on code inside emphasis", () => {
     expect(lost('<b><code style="font-weight: normal">A</code></b>')).toContain("plain text inside emphasis");
     expect(lost('<i><code style="font-style: normal">A</code></i>')).toContain("plain text inside emphasis");

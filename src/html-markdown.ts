@@ -53,7 +53,7 @@ export function htmlToMarkdownWithLosses(html: string): {
   const previous = losses;
   losses = new Set();
   try {
-    const markdown = finishMarkdown(renderFlow(parseHtml(html)));
+    const markdown = finishMarkdown(renderFlow(unwrap(parseHtml(html), html.length).nodes));
     return { markdown: markdown.length > 0 ? markdown : undefined, lost: [...losses] };
   } finally {
     losses = previous;
@@ -639,6 +639,29 @@ function renderFlow(nodes: HtmlNode[]): string {
   return items.map((item, index) => (index === 0 ? "" : flowSeparator(items[index - 1]!, item)) + item.text).join("");
 }
 
+/**
+ * A description's content: inside the line block that wraps it whole, if
+ * any, which a write keeps around what it changes. Only a wrapper of
+ * blocks: a single line is a block itself, and new lines written into it
+ * would nest deeper on every edit. `end` is where the content ends.
+ */
+function unwrap(nodes: HtmlNode[], end: number): { nodes: HtmlNode[]; end: number } {
+  for (;;) {
+    const content = nodes.filter((node) => node.kind === "element" || node.text.trim().length > 0);
+    const only = content[0];
+    if (
+      content.length !== 1 ||
+      only?.kind !== "element" ||
+      !LINE_TAGS.has(only.tag) ||
+      !only.children.some((child) => child.kind === "element" && isBlock(child.tag))
+    ) {
+      return { nodes, end };
+    }
+    nodes = only.children;
+    end = only.end ?? end;
+  }
+}
+
 /** A top-level block of a description: its Markdown, and the HTML it came from. */
 export interface MarkdownPart {
   markdown: string;
@@ -662,25 +685,7 @@ export function htmlToMarkdownParts(html: string):
   const previous = losses;
   losses = new Set();
   try {
-    let nodes = parseHtml(html);
-    let end = html.length;
-    // A description wrapped whole in one line block is its content.
-    for (;;) {
-      const content = nodes.filter((node) => node.kind === "element" || node.text.trim().length > 0);
-      const only = content[0];
-      // Only a wrapper of blocks: a single line is a block itself, and new
-      // lines written into it would nest deeper on every edit.
-      if (
-        content.length !== 1 ||
-        only?.kind !== "element" ||
-        !LINE_TAGS.has(only.tag) ||
-        !only.children.some((child) => child.kind === "element" && isBlock(child.tag))
-      ) {
-        break;
-      }
-      nodes = only.children;
-      end = only.end ?? end;
-    }
+    const { nodes, end } = unwrap(parseHtml(html), html.length);
     const items = flowItems(nodes);
     if (items.length === 0) return undefined;
     const startOf = (index: number) => nodes[index]!.start;
@@ -695,7 +700,7 @@ export function htmlToMarkdownParts(html: string):
     const gaps = items.slice(1).map((item, index) => html.slice(endOf(items[index]!.last), startOf(item.first)));
     const separators = items.slice(1).map((item, index) => flowSeparator(items[index]!, item));
     const joined = parts.map((part, index) => (index === 0 ? "" : separators[index - 1]) + part.markdown).join("");
-    const whole = finishMarkdown(renderFlow(parseHtml(html)));
+    const whole = finishMarkdown(renderFlow(unwrap(parseHtml(html), html.length).nodes));
     if (joined !== whole) return undefined;
     return {
       prefix: html.slice(0, startOf(items[0]!.first)),
@@ -1013,6 +1018,8 @@ function renderInlineChildren(nodes: HtmlNode[]): string {
 function renderCodeSpan(code: string): string {
   const text = collapseWhitespace(code);
   if (text.trim().length === 0) {
+    // Spaces alone cannot be a code span, so their code font would go.
+    if (text.length > 0) lose("other formatting");
     return text;
   }
   const fence = "`".repeat(longestRun(text, "`") + 1);
@@ -1030,11 +1037,12 @@ function textContent(node: HtmlNode): string {
 // Markers must touch the text they wrap, so surrounding spaces move outside.
 function wrap(text: string, marker: string): string {
   const match = /^(\s*)([\s\S]*?)(\s*)$/.exec(text);
+  // Spaces move outside the markers, or alone stay unmarked, which a
+  // strikethrough line shows.
+  if (marker === "~~" && match && (match[1] || match[3])) lose("strikethrough on spaces");
   if (!match || match[2] === "") {
     return text;
   }
-  // Spaces move outside the markers, which a strikethrough line shows.
-  if (marker === "~~" && (match[1] || match[3])) lose("strikethrough on spaces");
   return `${match[1]}${marker}${match[2]}${marker}${match[3]}`;
 }
 
