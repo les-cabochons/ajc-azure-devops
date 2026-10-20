@@ -233,7 +233,7 @@ describe("writeDescription", () => {
         sourceId: SOURCE_ID,
         text: "New plan\n\nRed note",
         expected: "Old plan\n\nRed note",
-        allowLoss: true,
+        allowedLoss: ["underline", "text colour"],
       }),
     ).resolves.toMatchObject({ outcome: "written" });
     expect(patches[0]![1]).toEqual({
@@ -241,6 +241,22 @@ describe("writeDescription", () => {
       path: "/fields/System.Description",
       value: '<div>New plan</div><div><br></div><div><span style="color: red">Red note</span></div>',
     });
+  });
+
+  it("writes nothing over a loss the user did not see", async () => {
+    // The user saw the underline; a colleague then added colour to the same text.
+    const item = { rev: 3, description: '<div><u><span style="color: red">Old plan</span></u></div>' };
+    const patches = stubAzure(item);
+
+    await expect(
+      writeDescription(connection, {
+        sourceId: SOURCE_ID,
+        text: "New plan",
+        expected: "Old plan",
+        allowedLoss: ["underline"],
+      }),
+    ).rejects.toThrow("Writing it would lose its text colour in Azure DevOps");
+    expect(patches).toEqual([]);
   });
 
   it("passes on a refused write even when the item changed meanwhile", async () => {

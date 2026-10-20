@@ -383,8 +383,8 @@ export interface BacklogWriteDescriptionRequest {
   text: string;
   /** The text `readDescription` returned just before. */
   expected: string;
-  /** The user saw what the conversion loses and saved anyway. */
-  allowLoss?: boolean;
+  /** The `lost` names the user saw and saved anyway. */
+  allowedLoss?: string[];
 }
 
 export interface BacklogWriteDescriptionResult {
