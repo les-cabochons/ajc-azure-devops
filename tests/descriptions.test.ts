@@ -469,6 +469,14 @@ describe("what a conversion loses", () => {
     expect(lost("<div><code>A</code><code>B</code></div>")).toEqual(["other formatting"]);
   });
 
+  it("joins italic beside bold italic, and escapes a ! that joining brings before a link", () => {
+    expect(htmlToMarkdownWithLosses("<div><b><i>A</i></b><i>B</i></div>")).toEqual({ markdown: "***A**B*", lost: [] });
+    expect(htmlToMarkdownWithLosses("<div><i>A</i><b><i>B</i></b></div>")).toEqual({ markdown: "*A**B***", lost: [] });
+    expect(
+      htmlToMarkdownWithLosses('<div><i>!</i><i><a href="https://e.test">Reference</a></i> Else</div>'),
+    ).toEqual({ markdown: "*\\![Reference](https://e.test)* Else", lost: [] });
+  });
+
   it("escapes a ! right before a link, and names a code block of spaces alone", () => {
     expect(htmlToMarkdownWithLosses('<div>!<a href="https://e.test">Reference</a> Wow!</div>')).toEqual({
       markdown: "\\![Reference](https://e.test) Wow!",

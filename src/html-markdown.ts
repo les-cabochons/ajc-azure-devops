@@ -110,6 +110,10 @@ function renderEmphasized(
   return text;
 }
 
+function isItalicJoin(left: number, right: number) {
+  return left % 2 === 1 && right % 2 === 1 && (left === 1 || right === 1);
+}
+
 function starsAtEnd(text: string) {
   return /\**$/.exec(text)![0].length;
 }
@@ -149,14 +153,19 @@ function joinInline(left: string, right: string): string {
         joinedRight.startsWith(marker) &&
         joinedLeft.length > marker.length &&
         !isEscaped(joinedLeft, joinedLeft.length - marker.length) &&
-        // A lone `*` is italic only where the stars on both sides are one.
-        (marker !== "*" || (starsAtEnd(joinedLeft) === 1 && starsAtStart(joinedRight) === 1))
+        // A lone `*` is italic where each side's stars are italic alone or
+        // italic within bold (three), and one side has italic alone.
+        (marker !== "*" || isItalicJoin(starsAtEnd(joinedLeft), starsAtStart(joinedRight)))
       ) {
         joinedLeft = joinedLeft.slice(0, -marker.length);
         joinedRight = joinedRight.slice(marker.length);
         merged = true;
       }
     }
+  }
+  // Joining can bring a `!` right before a link, as from `<i>!</i><i><a>`.
+  if (joinedRight.startsWith("[") && joinedLeft.endsWith("!") && !isEscaped(joinedLeft, joinedLeft.length - 1)) {
+    joinedLeft = `${joinedLeft.slice(0, -1)}\\!`;
   }
   return joinedLeft + joinedRight;
 }
