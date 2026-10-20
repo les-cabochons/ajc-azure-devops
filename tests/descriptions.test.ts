@@ -381,6 +381,14 @@ describe("what a conversion loses", () => {
     ).toEqual(["mention names Ajour cannot keep"]);
   });
 
+  it("names weights and decorations a write would show otherwise", () => {
+    expect(lost('<a href="https://e.test" style="text-decoration: none">Reference</a>')).toEqual(["other formatting"]);
+    expect(lost('<span style="font-weight: 300">Light</span>')).toEqual(["other formatting"]);
+    expect(lost('<span style="font-weight: 600">Semi-bold</span>')).toEqual(["other formatting"]);
+    expect(lost('<span style="font-style: oblique">Oblique</span>')).toEqual(["other formatting"]);
+    expect(lost('<span style="font-weight: 700">Bold</span> <span style="font-style: italic">i</span>')).toEqual([]);
+  });
+
   it("names formatting anywhere inside a mention", () => {
     expect(
       lost(

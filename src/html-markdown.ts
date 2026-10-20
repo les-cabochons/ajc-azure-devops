@@ -263,11 +263,14 @@ const TAG_ATTRIBUTES: Record<string, string[]> = {
   input: ["type", "checked", "disabled"],
 };
 
+// Only the values a write gives back as they look: bold as 700 and normal as
+// 400, italic, and strikethrough. A lighter, semi-bold or relative weight, an
+// oblique style, or a decoration turned off, as on a link, looks otherwise.
 const EMPHASIS_VALUES: Record<string, RegExp> = {
-  "font-weight": /^(?:bold|bolder|normal|lighter|\d{3}|inherit|initial|unset)$/,
-  "font-style": /^(?:normal|italic|oblique|inherit|initial|unset)$/,
-  "text-decoration": /^(?:(?:none|line-through|underline)\s*)+$|^(?:inherit|initial|unset)$/,
-  "text-decoration-line": /^(?:(?:none|line-through|underline)\s*)+$|^(?:inherit|initial|unset)$/,
+  "font-weight": /^(?:bold|normal|400|700|inherit|initial|unset)$/,
+  "font-style": /^(?:normal|italic|inherit|initial|unset)$/,
+  "text-decoration": /^(?:(?:line-through|underline)\s*)+$|^(?:inherit|unset)$/,
+  "text-decoration-line": /^(?:(?:line-through|underline)\s*)+$|^(?:inherit|unset)$/,
 };
 
 /** Style properties read, or named as lost elsewhere, when written plainly. */
