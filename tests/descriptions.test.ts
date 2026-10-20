@@ -294,6 +294,20 @@ describe("what a conversion loses", () => {
     expect(lost('<h1 style="font-weight: normal">Plain heading</h1>')).toEqual(["plain text inside emphasis"]);
   });
 
+  it("names empty lines or paragraphs inside a list item, which the Markdown joins", () => {
+    expect(lost("<ul><li>A<div><br></div><div>B</div></li><li>C</li></ul>")).toEqual(["blank lines in list items"]);
+    expect(lost("<ul><li><p>A</p><p>B</p></li></ul>")).toEqual(["blank lines in list items"]);
+    expect(lost("<ul><li>A<ul><li>Nested</li></ul></li><li><div>B</div><div>C</div></li></ul>")).toEqual([]);
+  });
+
+  it("names formatting anywhere inside a mention", () => {
+    expect(
+      lost(
+        '<a href="#" data-vss-mention="version:2.0,0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"><span><b>@Ana</b></span></a>',
+      ),
+    ).toEqual(["other formatting"]);
+  });
+
   it("names style on a mention, which keeps only its name", () => {
     expect(
       lost(

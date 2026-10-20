@@ -51,7 +51,7 @@ export function htmlToMarkdownWithLosses(html: string): {
   const previous = losses;
   losses = new Set();
   try {
-    const markdown = trimSpaces(renderFlow(parseHtml(html)).replace(/\n{3,}/g, "\n\n"));
+    const markdown = finishMarkdown(renderFlow(parseHtml(html)));
     return { markdown: markdown.length > 0 ? markdown : undefined, lost: [...losses] };
   } finally {
     losses = previous;
@@ -642,8 +642,9 @@ export function htmlToMarkdownParts(html: string):
     if (items.length === 0) return undefined;
     const startOf = (index: number) => nodes[index]!.start;
     const endOf = (index: number) => nodes[index + 1]?.start ?? end;
-    const parts = items.map((item) => ({
-      markdown: item.text,
+    // Each part as the whole description's Markdown has it, its HTML as it is.
+    const parts = items.map((item, index) => ({
+      markdown: finishPart(item.text, index === 0, index === items.length - 1),
       html: html.slice(startOf(item.first), endOf(item.last)),
       line: !item.paragraph && !/^(?:[-*+] |\d+[.)] |>|`{3}|~{3}|\||#| {4})/m.test(item.text),
       block: item.paragraph,
@@ -651,7 +652,7 @@ export function htmlToMarkdownParts(html: string):
     const gaps = items.slice(1).map((item, index) => html.slice(endOf(items[index]!.last), startOf(item.first)));
     const separators = items.slice(1).map((item, index) => flowSeparator(items[index]!, item));
     const joined = parts.map((part, index) => (index === 0 ? "" : separators[index - 1]) + part.markdown).join("");
-    const whole = trimSpaces(renderFlow(parseHtml(html)).replace(/\n{3,}/g, "\n\n"));
+    const whole = finishMarkdown(renderFlow(parseHtml(html)));
     if (joined !== whole) return undefined;
     return {
       prefix: html.slice(0, startOf(items[0]!.first)),
@@ -663,6 +664,30 @@ export function htmlToMarkdownParts(html: string):
   } finally {
     losses = previous;
   }
+}
+
+/**
+ * The whole description's Markdown as Ajour keeps it: one blank line at
+ * most, nothing blank before it, and nothing blank after, non-breaking
+ * spaces included, as Ajour trims the end of a description.
+ */
+function finishMarkdown(text: string) {
+  return text.replace(/\n{3,}/g, "\n\n").replace(/^[ \t\n\r\f]+/, "").trimEnd();
+}
+
+/** A part's Markdown as `finishMarkdown` leaves it in the whole description. */
+function finishPart(text: string, first: boolean, last: boolean) {
+  let finished = text.replace(/\n{3,}/g, "\n\n");
+  if (first) finished = finished.replace(/^[ \t\n\r\f]+/, "");
+  if (last) finished = finished.trimEnd();
+  return finished;
+}
+
+/** Whether an element holds anything but plain spans: formatting a mention cannot keep. */
+function hasFormattingInside(element: HtmlElement): boolean {
+  return elementsOf(element.children).some(
+    (child) => child.tag !== "span" || Boolean(child.attrs.style) || hasFormattingInside(child),
+  );
 }
 
 function renderBlock(element: HtmlElement): string {
@@ -732,9 +757,21 @@ function renderList(list: HtmlElement): string {
 }
 
 function renderListItem(item: HtmlElement): string {
-  // An item's lines join without blank lines, so code in it would lose its own.
+  // An item's lines join without blank lines, so code in it would lose its
+  // own, and so would an empty line or paragraphs set apart in it.
   if (hasCodeWithBlankLine(item, /\n[ \t]*\n/)) lose("blank lines in code");
-  return renderFlow(item.children).replace(/\n{2,}/g, "\n");
+  const items = flowItems(item.children);
+  const children = elementsOf(item.children);
+  if (
+    items.some((entry) => entry.spaced) ||
+    children.some((child, index) => child.tag === "p" && children[index + 1]?.tag === "p")
+  ) {
+    lose("blank lines in list items");
+  }
+  return items
+    .map((entry, index) => (index === 0 ? "" : flowSeparator(items[index - 1]!, entry)) + entry.text)
+    .join("")
+    .replace(/\n{2,}/g, "\n");
 }
 
 /** Whether preformatted code inside holds a run of blank lines like `pattern`. */
@@ -836,10 +873,7 @@ function renderInline(element: HtmlElement): string {
       const mention = /^version:[\d.]+,([0-9a-f-]{36})$/i.exec(element.attrs["data-vss-mention"] ?? "");
       if (mention) {
         // A mention keeps only its name: any style on it or inside it is lost.
-        if (
-          element.attrs.style?.trim() ||
-          elementsOf(element.children).some((child) => child.tag !== "span" || child.attrs.style)
-        ) {
+        if (element.attrs.style?.trim() || hasFormattingInside(element)) {
           lose("other formatting");
         }
         const name = textContent(element).trim().replace(/^@/, "").replace(/[[\]\\]/g, "");

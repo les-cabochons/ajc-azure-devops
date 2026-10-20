@@ -92,6 +92,22 @@ describe("writing an edit back into the description's HTML", () => {
     expect(written).toBe("<div>A2</div><div><br></div><div><br></div><div>B2</div>");
   });
 
+  it("keeps the non-breaking spaces Ajour trims from the end of a description", () => {
+    const html = "<div>A</div><div>B&nbsp;&nbsp;</div>";
+    const { markdown, written } = edit(html, (text) => text.replace("A", "A2"));
+
+    // Ajour trims a description's end, so the read does too.
+    expect(markdown).toBe("A\nB");
+    expect(written).toBe("<div>A2</div><div>B&nbsp;&nbsp;</div>");
+  });
+
+  it("keeps a block whose text holds several breaks when a later line changes", () => {
+    const html = "<div>A<br><br><br>B</div><div>C</div>";
+    const { written } = edit(html, (text) => text.replace("C", "C2"));
+
+    expect(written).toBe("<div>A<br><br><br>B</div><div>C2</div>");
+  });
+
   it("takes a kept line into the change when the edit cannot sit beside it", () => {
     // In Markdown the line goes on the new item, so the item takes it.
     const { written, edited } = edit("<div>Intro</div><div><br></div><div>A</div>", (markdown) =>
