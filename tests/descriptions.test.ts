@@ -126,7 +126,15 @@ describe("descriptions a sync sends", () => {
   it("writes a Markdown description's mentions as Ajour's mention links", async () => {
     const candidate = await candidateFor(`Ask @<${ANA.toUpperCase()}> first`, "Markdown");
 
-    expect(candidate.description).toEqual({ text: `Ask [@someone](mention:${ANA}) first` });
+    // The id keeps its case, so a write gives the source back as it was.
+    expect(candidate.description).toEqual({ text: `Ask [@someone](mention:${ANA.toUpperCase()}) first` });
+  });
+
+  it("gives back a Markdown description's mentions as written, in code it does not see too", async () => {
+    const source = `    @<${ANA.toUpperCase()}>\n\nElse`;
+    const candidate = await candidateFor(source, "Markdown");
+
+    expect(candidate.description?.lost).toBeUndefined();
   });
 
   it("sends an empty description when the item has none", async () => {
@@ -435,6 +443,14 @@ describe("what a conversion loses", () => {
     expect(htmlToMarkdownWithLosses('<div><a href="https://e.test">A&nbsp;&nbsp;</a>X</div>').markdown).toBe(
       "[A  ](https://e.test)X",
     );
+  });
+
+  it("names spaces at a mention's edges, and spaces under a strikethrough's edges", () => {
+    expect(
+      lost('<a href="#" data-vss-mention="version:2.0,0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d">@Ana&nbsp;&nbsp;</a>next'),
+    ).toEqual(["mention names Ajour cannot keep"]);
+    expect(lost("<div><s>A&nbsp;&nbsp;</s>X</div>")).toEqual(["strikethrough on spaces"]);
+    expect(lost("<div><s>A</s> X <b>bold </b>Y</div>")).toEqual([]);
   });
 
   it("names emphasis turned off on code inside emphasis", () => {

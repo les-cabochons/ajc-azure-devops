@@ -21,7 +21,8 @@ function markdownMentionsToAjour(text: string, workItem: AzureWorkItem) {
       assignee?.id?.toLowerCase() === id.toLowerCase() && assignee.displayName
         ? assignee.displayName.replace(/[[\]\\]/g, "")
         : "someone";
-    return `[@${name}](mention:${id.toLowerCase()})`;
+    // The id keeps its case, so the write gives back `@<id>` as it was.
+    return `[@${name}](mention:${id})`;
   });
 }
 
@@ -73,10 +74,9 @@ export function describeWorkItem(workItem: AzureWorkItem): ConnectorSyncedDescri
       const source = normalizeMarkdown(value);
       text = markdownMentionsToAjour(source, workItem);
       // Mentions read and written in different places, such as in code,
-      // would write back changed: keep such a description read-only.
-      // Ids are compared as the write gives them: lower case, as in Ajour.
-      const asWritten = replaceOutsideCode(source, MARKDOWN_MENTION, (_match, id: string) => `@<${id.toLowerCase()}>`);
-      if (toAzureMarkdown(text) !== asWritten) lost = [NOT_WRITABLE_EXACTLY];
+      // would write back changed: keep such a description read-only. Ids
+      // keep their case both ways, so the write gives back the source.
+      if (toAzureMarkdown(text) !== source) lost = [NOT_WRITABLE_EXACTLY];
       // A write gives every line the source's one line ending, so a mix, or
       // old Mac endings, would change.
       if (/\r(?!\n)/.test(value) || (value.includes("\r\n") && /(?:^|[^\r])\n/.test(value))) {

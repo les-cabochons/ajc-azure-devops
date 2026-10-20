@@ -963,7 +963,10 @@ function renderInline(element: HtmlElement): string {
         if (element.attrs.style?.trim() || hasFormattingInside(element)) {
           lose("other formatting");
         }
-        const fullName = textContent(element).trim().replace(/^@/, "");
+        const written = textContent(element);
+        // A mention keeps only its name: spaces around it would go.
+        if (written !== written.trim()) lose("mention names Ajour cannot keep");
+        const fullName = written.trim().replace(/^@/, "");
         // A mention's name in Ajour holds no brackets or backslashes.
         if (/[[\]\\]/.test(fullName)) lose("mention names Ajour cannot keep");
         const name = fullName.replace(/[[\]\\]/g, "");
@@ -1030,6 +1033,8 @@ function wrap(text: string, marker: string): string {
   if (!match || match[2] === "") {
     return text;
   }
+  // Spaces move outside the markers, which a strikethrough line shows.
+  if (marker === "~~" && (match[1] || match[3])) lose("strikethrough on spaces");
   return `${match[1]}${marker}${match[2]}${marker}${match[3]}`;
 }
 
