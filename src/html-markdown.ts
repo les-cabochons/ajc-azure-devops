@@ -143,7 +143,8 @@ function noteEmphasisResets(element: HtmlElement, tagEmphasis: Emphasis | undefi
   const weight = /(?:^|;)font-weight:([^;]+)/.exec(style)?.[1];
   const fontStyle = /(?:^|;)font-style:([^;]+)/.exec(style)?.[1];
   const decoration = /(?:^|;)text-decoration(?:-line)?:([^;]+)/.exec(style)?.[1];
-  const inherited = (value: string) => ["inherit", "initial", "unset"].includes(value);
+  // `initial` is the normal weight and style, so it turns emphasis off.
+  const inherited = (value: string) => ["inherit", "unset"].includes(value);
   // Emphasis around it, or the element's own tag, as `<b style="font-weight:normal">`.
   const has = (kind: Emphasis) => activeEmphasis[kind] > 0 || tagEmphasis === kind;
   const styled = styledEmphasis(element);
@@ -218,6 +219,79 @@ function noteLosses(element: HtmlElement) {
   ) {
     lose("merged table cells");
   }
+  noteUnknownFormatting(element);
+}
+
+/** The tags whose look the Markdown and the write keep, or whose loss has a name. */
+const KNOWN_TAGS = new Set([
+  "p", "div", "span", "br", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote",
+  "pre", "code", "kbd", "samp", "tt", "b", "strong", "i", "em", "s", "strike", "del", "a", "img",
+  "table", "thead", "tbody", "tfoot", "tr", "td", "th", "hr", "font", "u", "ins", "sup", "sub",
+  "mark", "input", "iframe", "video", "audio", "object", "embed", "section", "article", "header",
+  "footer", "main", "nav", "aside",
+]);
+
+/** Attributes that change nothing a reader sees. */
+const NEUTRAL_ATTRIBUTE = /^(?:id|class|lang|title|role|data-[\w-]+|aria-[\w-]+)$/;
+
+/** The attributes each tag may carry, read or named as lost elsewhere. */
+const TAG_ATTRIBUTES: Record<string, string[]> = {
+  a: ["href", "target", "rel", "name", "data-vss-mention"],
+  img: ["src", "alt", "width", "height"],
+  ol: ["start", "type", "reversed"],
+  li: ["value"],
+  td: ["colspan", "rowspan"],
+  th: ["colspan", "rowspan"],
+  font: ["color", "face", "size"],
+  input: ["type", "checked", "disabled"],
+};
+
+const EMPHASIS_VALUES: Record<string, RegExp> = {
+  "font-weight": /^(?:bold|bolder|normal|lighter|\d{3}|inherit|initial|unset)$/,
+  "font-style": /^(?:normal|italic|oblique|inherit|initial|unset)$/,
+  "text-decoration": /^(?:(?:none|line-through|underline)\s*)+$|^(?:inherit|initial|unset)$/,
+  "text-decoration-line": /^(?:(?:none|line-through|underline)\s*)+$|^(?:inherit|initial|unset)$/,
+};
+
+/** Style properties read, or named as lost elsewhere, when written plainly. */
+const NAMED_STYLE_PROPERTIES = new Set([
+  "color", "background-color", "background", "font-family", "font-size", "text-align",
+  "list-style-type", "list-style",
+]);
+
+/**
+ * Names anything else an element carries as "other formatting": a tag,
+ * attribute or style the Markdown cannot keep and no other loss names, a
+ * style set twice or `!important`. Only what is known to come back on write
+ * leaves a description editable.
+ */
+function noteUnknownFormatting(element: HtmlElement) {
+  if (!KNOWN_TAGS.has(element.tag)) lose("other formatting");
+  // Embedded content is lost whole, under its own name.
+  if (["iframe", "video", "audio", "object", "embed"].includes(element.tag)) return;
+  const allowed = TAG_ATTRIBUTES[element.tag] ?? [];
+  for (const name of Object.keys(element.attrs)) {
+    if (name === "style" || name === "align" || NEUTRAL_ATTRIBUTE.test(name) || allowed.includes(name)) continue;
+    lose("other formatting");
+  }
+  // An image's style is checked with its size.
+  if (element.tag === "img") return;
+  const seen = new Map<string, string>();
+  for (const declaration of (element.attrs.style ?? "").split(";")) {
+    if (!declaration.trim()) continue;
+    const colon = declaration.indexOf(":");
+    const name = (colon > 0 ? declaration.slice(0, colon) : declaration).trim().toLowerCase();
+    const value = colon > 0 ? declaration.slice(colon + 1).trim().toLowerCase() : "";
+    const repeated = seen.has(name) && seen.get(name) !== value;
+    seen.set(name, value);
+    if (
+      repeated ||
+      value.includes("!important") ||
+      !(NAMED_STYLE_PROPERTIES.has(name) || EMPHASIS_VALUES[name]?.test(value))
+    ) {
+      lose("other formatting");
+    }
+  }
 }
 
 /**
@@ -275,13 +349,22 @@ function noteImageLosses(element: HtmlElement) {
   if (element.attrs.src?.includes(IMAGE_SIZE_MARK)) lose("image attributes");
 }
 
-const LIST_STYLE_DEFAULTS = new Set(["", "inherit", "initial", "unset", "disc", "decimal"]);
-
 /** Notes numbering or markers a list or item sets that Markdown lists cannot. */
 function noteListLosses(element: HtmlElement, declarations: Map<string, string>) {
-  const style = declarations.get("list-style-type") ?? declarations.get("list-style");
+  const type = declarations.get("list-style-type");
+  const shorthand = declarations.get("list-style");
+  // A list keeps only its own default marker; an item's marker follows its list.
+  const plain = (value: string | undefined) =>
+    value === undefined ||
+    value === "inherit" ||
+    (element.tag === "ul" && value === "disc") ||
+    (element.tag === "ol" && value === "decimal");
+  const start = element.attrs.start;
   if (
-    (style !== undefined && !LIST_STYLE_DEFAULTS.has(style)) ||
+    !plain(type) ||
+    !plain(shorthand) ||
+    (type !== undefined && shorthand !== undefined) ||
+    (element.tag === "ol" && start !== undefined && !/^\d{1,9}$/.test(start.trim())) ||
     (element.tag === "ol" && element.attrs.type !== undefined && element.attrs.type !== "1") ||
     (element.tag === "ol" && "reversed" in element.attrs) ||
     (element.tag === "li" && element.attrs.value !== undefined)
@@ -480,7 +563,8 @@ function renderBlock(element: HtmlElement): string {
 
 function renderList(list: HtmlElement): string {
   const ordered = list.tag === "ol";
-  let number = Number.parseInt(list.attrs.start ?? "", 10) || 1;
+  const start = Number.parseInt(list.attrs.start ?? "", 10);
+  let number = Number.isNaN(start) ? 1 : start;
   const entries: { text: string; indent: number }[] = [];
 
   for (const child of elementsOf(list.children)) {
@@ -519,7 +603,19 @@ function hasCodeWithBlankLine(element: HtmlElement, pattern: RegExp): boolean {
   );
 }
 
+/** Notes formatting inside code, which keeps only its text. */
+function noteCodeFormatting(element: HtmlElement) {
+  for (const child of elementsOf(element.children)) {
+    if (child.tag !== "br" && !((child.tag === "span" || CODE_TAGS.has(child.tag)) && !child.attrs.style)) {
+      lose("formatting inside code");
+      return;
+    }
+    noteCodeFormatting(child);
+  }
+}
+
 function renderCodeBlock(element: HtmlElement): string {
+  noteCodeFormatting(element);
   const code = textContent(element).replace(/^\n/, "").replace(/\n+$/, "");
   // The Markdown keeps one blank line at most, in code too.
   if (/\n[ \t]*\n[ \t]*\n/.test(code)) lose("blank lines in code");
@@ -592,6 +688,7 @@ function renderInline(element: HtmlElement): string {
     case "kbd":
     case "samp":
     case "tt":
+      noteCodeFormatting(element);
       return renderCodeSpan(textContent(element));
     case "a": {
       // An Azure DevOps mention, as Ajour writes one.

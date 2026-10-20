@@ -29,6 +29,7 @@ describe("Markdown written back as HTML reads back the same", () => {
     lists:
       '<ul><li>One<li>Two</li><ul><li>Nested</li></ul><li><div>Three</div></li></ul><ol start="4"><li>Four</li><li>Five<ol><li>Inner</li></ol></li></ol>',
     "an item of several lines": "<ul><li><div>First</div><div>Second</div></li><li>Next</li></ul>",
+    "a list starting at zero": '<ol start="0"><li>Zero</li><li>One</li></ol>',
     "two lists apart": "<ul><li>A</li></ul><ul><li>B</li></ul><ol><li>C</li></ol>",
     "a code block": "<pre>const a = 1;\n  if (a &lt; 2) {}\n```\n</pre>",
     "a table": "<table><tbody><tr><td><b>Day</b></td><td>Hours</td></tr><tr><td>Mon</td><td>7|5</td></tr><tr><td></td><td>`x`</td></tr></tbody></table>",

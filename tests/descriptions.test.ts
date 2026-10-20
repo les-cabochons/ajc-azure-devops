@@ -257,6 +257,40 @@ describe("what a conversion loses", () => {
     ]);
   });
 
+  it("names any tag, attribute or style it does not know as other formatting", () => {
+    expect(lost("<table><caption>Matrix</caption><tr><td>Production</td></tr></table>")).toEqual([
+      "other formatting",
+    ]);
+    expect(lost('<table><tr><td style="border: 3px solid red">Production</td></tr></table>')).toEqual([
+      "other formatting",
+    ]);
+    expect(lost('<table border="1"><tr><td>Production</td></tr></table>')).toEqual(["other formatting"]);
+    expect(lost('<span style="font-weight: bold !important">Warning</span>')).toEqual(["other formatting"]);
+    expect(lost('<b style="font-weight: bold; font-weight: normal">Plain</b>')).toContain("other formatting");
+    expect(lost('<div class="x" id="y" lang="en" data-foo="1"><a href="https://e.test" target="_blank">ok</a></div>')).toEqual(
+      [],
+    );
+  });
+
+  it("turns emphasis off with initial, and keeps a list starting at zero", () => {
+    expect(lost('<b>bold <span style="font-weight: initial">plain</span></b>')).toEqual([
+      "plain text inside emphasis",
+    ]);
+    expect(htmlToMarkdownWithLosses('<ol start="0"><li>Zero</li><li>One</li></ol>')).toEqual({
+      markdown: "0. Zero\n1. One",
+      lost: [],
+    });
+  });
+
+  it("names a marker another list type would show, and emphasis inside code", () => {
+    expect(lost('<ul style="list-style-type: decimal"><li>A</li></ul>')).toEqual(["list numbering style"]);
+    expect(lost('<ul style="list-style-type: disc; list-style: none"><li>A</li></ul>')).toEqual([
+      "list numbering style",
+    ]);
+    expect(lost("<pre><code><b>Warning</b> normal</code></pre>")).toEqual(["formatting inside code"]);
+    expect(lost("<pre><code>plain<br>lines</code></pre>")).toEqual([]);
+  });
+
   it("names list numbering Markdown lists cannot carry", () => {
     expect(lost("<ol reversed><li>A</li><li>B</li></ol>")).toEqual(["list numbering style"]);
     expect(lost('<ol><li>A</li><li value="8">B</li></ol>')).toEqual(["list numbering style"]);
