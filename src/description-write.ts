@@ -18,6 +18,24 @@ export const AZURE_DESCRIPTION_MAX_LENGTH = 1_000_000;
 
 const DESCRIPTION_FIELDS = "System.Description,System.AssignedTo";
 
+/**
+ * The HTML to write: the description's own, with only what the user changed
+ * written from the Markdown. A description that has none yet takes the
+ * whole Markdown; one whose untouched parts could not be kept as they are
+ * is not written at all.
+ */
+function htmlFor(workItem: AzureWorkItem, currentText: string, text: string) {
+  const source = workItem.fields?.["System.Description"];
+  if (typeof source !== "string" || !currentText) return markdownToHtml(text);
+  const patched = patchDescriptionHtml(source, text);
+  if (patched === undefined) {
+    throw new Error(
+      "Ajour cannot write this edit without changing parts of the description you did not edit. Edit it in Azure DevOps.",
+    );
+  }
+  return patched;
+}
+
 /** Whether a refused patch is how Azure DevOps answers a failed test operation. */
 function isRevisionTestFailure(error: unknown) {
   return error instanceof Error && /request failed \((?:400|409|412)\)/.test(error.message);
@@ -66,12 +84,7 @@ export async function writeAzureDescription(
   }
 
   const markdown = isMarkdownField(workItem, "System.Description");
-  const source = workItem.fields?.["System.Description"];
-  // An HTML description keeps the HTML of every block the user left alone.
-  const value = markdown
-    ? toAzureMarkdown(request.text)
-    : ((typeof source === "string" ? patchDescriptionHtml(source, request.text) : undefined) ??
-      markdownToHtml(request.text));
+  const value = markdown ? toAzureMarkdown(request.text) : htmlFor(workItem, current.text, request.text);
   if (value.length > AZURE_DESCRIPTION_MAX_LENGTH) {
     throw new Error(
       `This description is too long for Azure DevOps: ${value.length.toLocaleString("en-US")} of ${AZURE_DESCRIPTION_MAX_LENGTH.toLocaleString("en-US")} characters once converted.`,

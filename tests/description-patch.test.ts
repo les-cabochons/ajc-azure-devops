@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { patchDescriptionHtml } from "../src/description-patch.ts";
 import { htmlToMarkdown } from "../src/html-markdown.ts";
+import { markdownToHtml } from "../src/markdown-html.ts";
 
 /** The source's Markdown, edited by `change`, written back into its HTML. */
 function edit(html: string, change: (markdown: string) => string) {
@@ -67,6 +68,39 @@ describe("writing an edit back into the description's HTML", () => {
       html = patchDescriptionHtml(html, text)!;
     }
     expect(html).toBe("<div>Third</div>");
+  });
+
+  it("sets a rewritten paragraph apart as the source did, and keeps the lines around it", () => {
+    const html = "<div>A</div><p>B</p><div>C&nbsp;&nbsp;D</div>";
+    const { written, edited } = edit(html, (markdown) => markdown.replace("B", "B2"));
+
+    expect(written).toBe("<div>A</div><div><br></div><div>B2</div><div><br></div><div>C&nbsp;&nbsp;D</div>");
+    expect(htmlToMarkdown(written!)).toBe(edited);
+  });
+
+  it("keeps non-breaking spaces on the untouched lines of a changed block", () => {
+    const { written } = edit("<div>A&nbsp;&nbsp;B<br>C</div><div>D</div>", (markdown) => markdown.replace("C", "C2"));
+
+    expect(written).toBe("<div>A  B<br>C2</div><div>D</div>");
+  });
+
+  it("keeps the empty lines between two changed lines", () => {
+    const { written } = edit("<div>A</div><div><br></div><div><br></div><div>B</div>", (markdown) =>
+      markdown.replace("A", "A2").replace("B", "B2"),
+    );
+
+    expect(written).toBe("<div>A2</div><div><br></div><div><br></div><div>B2</div>");
+  });
+
+  it("takes a kept line into the change when the edit cannot sit beside it", () => {
+    // In Markdown the line goes on the new item, so the item takes it.
+    const { written, edited } = edit("<div>Intro</div><div><br></div><div>A</div>", (markdown) =>
+      markdown.replace("\n\nA", "\n\n- x\nA"),
+    );
+
+    // The empty line before it stays.
+    expect(written).toBe("<div>Intro</div><div><br></div><ul><li>x<br>A</li></ul>");
+    expect(htmlToMarkdown(written!)).toBe(htmlToMarkdown(markdownToHtml(edited)));
   });
 
   it("gives up, for the whole Markdown to be written, when it cannot read back as the edit", () => {

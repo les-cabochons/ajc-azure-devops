@@ -29,8 +29,8 @@ describe("htmlToMarkdown", () => {
     );
   });
 
-  it("decodes entities and collapses whitespace", () => {
-    expect(htmlToMarkdown("<div>a &amp; b&nbsp;&lt;c&gt;\n   d&#39;e</div>")).toBe("a & b <c> d'e");
+  it("decodes entities and collapses whitespace, but keeps non-breaking spaces", () => {
+    expect(htmlToMarkdown("<div>a &amp; b&nbsp;&lt;c&gt;\n   d&#39;e</div>")).toBe("a & b <c> d'e");
   });
 
   it("drops scripts and styles", () => {

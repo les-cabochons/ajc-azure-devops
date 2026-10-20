@@ -31,12 +31,18 @@ const LIST_ITEM = /^( {0,3})([-*+]|\d{1,9}[.)])( {1,4}|$)/;
 const TABLE_DIVIDER = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
 const SETEXT = /^ {0,3}(=+|-+)[ \t]*$/;
 
+// A non-breaking space is text, as in CommonMark: only spaces and tabs are
+// blank or indent.
 function isBlank(line: string) {
-  return line.trim().length === 0;
+  return /^[ \t]*$/.test(line);
 }
 
 function indentOf(line: string) {
-  return line.length - line.trimStart().length;
+  return line.length - line.replace(/^[ \t]+/, "").length;
+}
+
+function trimSpaces(text: string) {
+  return text.replace(/^[ \t]+|[ \t]+$/g, "");
 }
 
 /** Whether a line starts a block that ends a paragraph. */
@@ -54,7 +60,7 @@ function startsBlock(line: string) {
 }
 
 function isTableRow(line: string) {
-  return line.trimStart().startsWith("|");
+  return line.replace(/^[ \t]+/, "").startsWith("|");
 }
 
 function parseBlocks(lines: string[]): Block[] {
@@ -146,7 +152,7 @@ function parseBlocks(lines: string[]): Block[] {
         blocks.push({
           kind: "heading",
           level: setext[1]![0] === "=" ? 1 : 2,
-          text: paragraph.map((entry) => entry.trim()).join(" "),
+          text: paragraph.map(trimSpaces).join(" "),
         });
         paragraph.length = 0;
         index += 1;
@@ -198,7 +204,7 @@ function parseList(lines: string[], start: number, blocks: Block[]): number {
         break;
       } else {
         // A lazy line goes on the item's paragraph.
-        body.push(next.trimStart());
+        body.push(next.replace(/^[ \t]+/, ""));
       }
       index += 1;
     }
@@ -215,20 +221,20 @@ function parseList(lines: string[], start: number, blocks: Block[]): number {
 
 /** A table row's cells, split on pipes that are not escaped. */
 function splitRow(line: string): string[] {
-  let text = line.trim();
+  let text = trimSpaces(line);
   if (text.startsWith("|")) text = text.slice(1);
   if (text.endsWith("|") && !isEscapedAt(text, text.length - 1)) text = text.slice(0, -1);
   const cells: string[] = [];
   let cell = "";
   for (let at = 0; at < text.length; at += 1) {
     if (text[at] === "|" && !isEscapedAt(text, at)) {
-      cells.push(cell.trim());
+      cells.push(trimSpaces(cell));
       cell = "";
     } else {
       cell += text[at];
     }
   }
-  cells.push(cell.trim());
+  cells.push(trimSpaces(cell));
   return cells;
 }
 
@@ -266,7 +272,7 @@ function renderBlock(block: Block, inItem: boolean): string {
       return `<div>${html}</div>`;
     }
     case "heading":
-      return `<h${block.level}>${renderInline(block.text.trim())}</h${block.level}>`;
+      return `<h${block.level}>${renderInline(trimSpaces(block.text))}</h${block.level}>`;
     case "code":
       return `<pre><code>${escapeHtml(block.text)}</code></pre>`;
     case "rule":
@@ -305,7 +311,7 @@ function renderLines(lines: string[]) {
   return renderInline(
     lines
       .map((line, index) => {
-        const text = line.trim();
+        const text = trimSpaces(line);
         // Only a backslash a line break follows is a hard break.
         const hardBreak =
           index < lines.length - 1 && text.endsWith("\\") && !isEscapedAt(text, text.length - 1);

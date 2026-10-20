@@ -291,6 +291,15 @@ describe("what a conversion loses", () => {
     expect(lost('<h1><span style="font-weight: normal">Plain heading</span></h1>')).toEqual([
       "plain text inside emphasis",
     ]);
+    expect(lost('<h1 style="font-weight: normal">Plain heading</h1>')).toEqual(["plain text inside emphasis"]);
+  });
+
+  it("names style on a mention, which keeps only its name", () => {
+    expect(
+      lost(
+        '<a href="#" data-vss-mention="version:2.0,0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d" style="font-weight: bold">@Ana</a>',
+      ),
+    ).toEqual(["other formatting"]);
   });
 
   it("names merged cells at any span but one, and formatting in a mention", () => {

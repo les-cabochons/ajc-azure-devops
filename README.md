@@ -115,12 +115,16 @@ write):
   same but now cut or lossy, as after a colleague added formatting, it writes
   nothing and says why.
 - An HTML description keeps the HTML of every block the edit leaves alone,
-  exactly as it was: its empty editor lines, spacing and markup stay. Only
-  changed or new blocks are written from the Markdown, as editor lines (one
-  `<div>` per paragraph, an empty `<div><br></div>` between paragraphs). The
-  reader shows an empty editor line between lines as a blank line, so the
-  Markdown and the editor agree. If the kept blocks cannot read back as the
-  edit, the whole Markdown is written instead.
+  and of every space between blocks whose blank lines stayed, exactly as it
+  was: its empty editor lines, spacing and markup stay. Only changed or new
+  blocks are written from the Markdown, as editor lines (one `<div>` per
+  paragraph, an empty `<div><br></div>` between paragraphs). A kept block that
+  cannot sit beside the changed text, as a line right below a new list item,
+  joins the change. The reader shows an empty editor line between lines as a
+  blank line, and keeps non-breaking spaces, so the Markdown and the editor
+  agree. If the result would not read back as the whole Markdown written
+  would, nothing is written, and the error says to edit it in Azure DevOps. A
+  description with no text yet takes the whole Markdown.
 - An item that stores its description as Markdown gets Markdown, with
   mentions outside code as `@<identity id>`. Any other gets HTML from a dependency-free
   converter for the Markdown above and the CommonMark people type: headings,

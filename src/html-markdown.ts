@@ -51,9 +51,7 @@ export function htmlToMarkdownWithLosses(html: string): {
   const previous = losses;
   losses = new Set();
   try {
-    const markdown = renderFlow(parseHtml(html))
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    const markdown = trimSpaces(renderFlow(parseHtml(html)).replace(/\n{3,}/g, "\n\n"));
     return { markdown: markdown.length > 0 ? markdown : undefined, lost: [...losses] };
   } finally {
     losses = previous;
@@ -422,7 +420,7 @@ export function decodeHtmlEntities(value: string) {
       case "apos":
         return "'";
       case "nbsp":
-        return " ";
+        return "\u00A0";
       default:
         return entity;
     }
@@ -566,7 +564,7 @@ function flowItems(nodes: HtmlNode[]): FlowItem[] {
     if (node.kind === "element" && isBlock(node.tag)) {
       flush(index - 1);
       const text = renderBlock(node);
-      if (text.trim().length > 0) {
+      if (trimSpaces(text).length > 0) {
         items.push({ text, paragraph: PARAGRAPH_TAGS.has(node.tag), spaced, first: index, last: index });
         spaced = false;
       } else if (LINE_TAGS.has(node.tag) && items.length > 0) {
@@ -604,6 +602,8 @@ export interface MarkdownPart {
   html: string;
   /** Plain lines, which may sit right beside other lines; otherwise a block. */
   line: boolean;
+  /** A block the reader sets apart by a blank line whatever comes between. */
+  block: boolean;
 }
 
 /**
@@ -646,11 +646,12 @@ export function htmlToMarkdownParts(html: string):
       markdown: item.text,
       html: html.slice(startOf(item.first), endOf(item.last)),
       line: !item.paragraph && !/^(?:[-*+] |\d+[.)] |>|`{3}|~{3}|\||#| {4})/m.test(item.text),
+      block: item.paragraph,
     }));
     const gaps = items.slice(1).map((item, index) => html.slice(endOf(items[index]!.last), startOf(item.first)));
     const separators = items.slice(1).map((item, index) => flowSeparator(items[index]!, item));
     const joined = parts.map((part, index) => (index === 0 ? "" : separators[index - 1]) + part.markdown).join("");
-    const whole = renderFlow(parseHtml(html)).replace(/\n{3,}/g, "\n\n").trim();
+    const whole = trimSpaces(renderFlow(parseHtml(html)).replace(/\n{3,}/g, "\n\n"));
     if (joined !== whole) return undefined;
     return {
       prefix: html.slice(0, startOf(items[0]!.first)),
@@ -672,6 +673,8 @@ function renderBlock(element: HtmlElement): string {
     case "h4":
     case "h5":
     case "h6": {
+      // A heading is bold by default, so its own normal weight is lost too.
+      noteEmphasisResets(element, "bold");
       headingDepth += 1;
       let text: string;
       try {
@@ -832,7 +835,11 @@ function renderInline(element: HtmlElement): string {
       // An Azure DevOps mention, as Ajour writes one.
       const mention = /^version:[\d.]+,([0-9a-f-]{36})$/i.exec(element.attrs["data-vss-mention"] ?? "");
       if (mention) {
-        if (elementsOf(element.children).some((child) => child.tag !== "span" || child.attrs.style)) {
+        // A mention keeps only its name: any style on it or inside it is lost.
+        if (
+          element.attrs.style?.trim() ||
+          elementsOf(element.children).some((child) => child.tag !== "span" || child.attrs.style)
+        ) {
           lose("other formatting");
         }
         const name = textContent(element).trim().replace(/^@/, "").replace(/[[\]\\]/g, "");
@@ -841,7 +848,7 @@ function renderInline(element: HtmlElement): string {
       // A link's own style, such as a struck-out old link, goes inside its text.
       const text = renderEmphasized(element, undefined);
       const href = element.attrs.href?.trim();
-      if (!href || text.trim().length === 0) return text;
+      if (!href || trimSpaces(text).length === 0) return text;
       // The spaces at the link's edges stay text beside it.
       const [, before = "", label = "", after = ""] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text) ?? [];
       return `${before}[${label}](${encodeUrl(href)})${after}`;
@@ -902,14 +909,20 @@ function encodeUrl(url: string): string {
   return url.replace(/[()\s]/g, encodeURIComponent);
 }
 
+// Non-breaking spaces are text the writer gives back, so only ordinary
+// white space collapses and trims.
 function collapseWhitespace(text: string): string {
-  return text.replace(/\s+/g, " ");
+  return text.replace(/[ \t\n\r\f]+/g, " ");
+}
+
+function trimSpaces(text: string): string {
+  return text.replace(/^[ \t\n\r\f]+|[ \t\n\r\f]+$/g, "");
 }
 
 function cleanLines(text: string): string {
   return text
     .split("\n")
-    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .map((line) => trimSpaces(line.replace(/[ \t]+/g, " ")))
     .join("\n")
     .replace(/^\n+|\n+$/g, "");
 }
@@ -926,7 +939,7 @@ function escapeLineStarts(text: string): string {
     .split("\n")
     .map((line) =>
       line
-        .trimStart()
+        .replace(/^[ \t]+/, "")
         .replace(/^(#{1,6}(?=\s|$)|>|[-+](?=\s)|[-=](?=[-=\s]*$)|\d+(?=[.)]\s))/, (token: string) =>
           /^\d/.test(token) ? `${token}\\` : `\\${token}`,
         ),
@@ -935,7 +948,7 @@ function escapeLineStarts(text: string): string {
 }
 
 function singleLine(text: string): string {
-  return text.replace(/\s*\n\s*/g, " ").trim();
+  return trimSpaces(text.replace(/[ \t]*\n[ \t]*/g, " "));
 }
 
 function prefixLines(text: string, prefix: string): string {
