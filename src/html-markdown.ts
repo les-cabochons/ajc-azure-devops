@@ -66,6 +66,62 @@ function lose(what: string) {
 const EMPTY_STYLE_VALUES = new Set(["", "inherit", "initial", "unset", "transparent", "none"]);
 const CODE_TAGS = new Set(["pre", "code", "kbd", "samp", "tt"]);
 
+type Emphasis = "bold" | "italic" | "strike";
+const EMPHASIS_MARKERS: Record<Emphasis, string> = { bold: "**", italic: "_", strike: "~~" };
+
+/**
+ * The emphasis the content being rendered already has, so nested emphasis,
+ * as `<span style="font-style:italic"><i>x</i></span>`, is applied once.
+ */
+const activeEmphasis: Record<Emphasis, number> = { bold: 0, italic: 0, strike: 0 };
+
+/** Renders an inline element's children with its tag's and its style's emphasis. */
+function renderEmphasized(element: HtmlElement, tagEmphasis: Emphasis | undefined): string {
+  const styled = styledEmphasis(element);
+  const wanted = new Set<Emphasis>(tagEmphasis ? [tagEmphasis] : []);
+  if (styled.bold) wanted.add("bold");
+  if (styled.italic) wanted.add("italic");
+  if (styled.strike) wanted.add("strike");
+  const applied = [...wanted].filter((kind) => activeEmphasis[kind] === 0);
+  for (const kind of applied) activeEmphasis[kind] += 1;
+  let text: string;
+  try {
+    text = renderInlineChildren(element.children);
+  } finally {
+    for (const kind of applied) activeEmphasis[kind] -= 1;
+  }
+  for (const kind of ["strike", "italic", "bold"] as const) {
+    if (applied.includes(kind)) text = wrap(text, EMPHASIS_MARKERS[kind]);
+  }
+  return text;
+}
+
+/**
+ * Joins two runs of inline Markdown. Where one run's emphasis ends right as
+ * the next run's same emphasis starts, as in two bold spans side by side,
+ * the markers meet and would show; the runs join into one emphasis instead.
+ */
+function joinInline(left: string, right: string): string {
+  let joinedLeft = left;
+  let joinedRight = right;
+  for (let merged = true; merged; ) {
+    merged = false;
+    for (const marker of ["**", "~~", "_"]) {
+      if (
+        joinedLeft.endsWith(marker) &&
+        joinedRight.startsWith(marker) &&
+        joinedLeft.length > marker.length &&
+        joinedLeft[joinedLeft.length - marker.length - 1] !== "\\"
+      ) {
+        joinedLeft = joinedLeft.slice(0, -marker.length);
+        joinedRight = joinedRight.slice(marker.length);
+        merged = true;
+      }
+    }
+  }
+  return joinedLeft + joinedRight;
+}
+
 /** The bold, italic and strikethrough an element's style asks for, as Markdown can hold them. */
 function styledEmphasis(element: HtmlElement) {
   const style = (element.attrs.style ?? "").toLowerCase().replace(/\s+/g, "");
@@ -96,6 +152,13 @@ function noteLosses(element: HtmlElement) {
     (has("font-family") || has("font-size") || (element.tag === "font" && (element.attrs.face || element.attrs.size)))
   ) {
     lose("font");
+  }
+  if (isBlock(element.tag)) {
+    // Markdown emphasis cannot span a block's lines, so a block's own is lost.
+    const emphasis = styledEmphasis(element);
+    if (emphasis.bold) lose("bold text");
+    if (emphasis.italic) lose("italic text");
+    if (emphasis.strike) lose("strikethrough text");
   }
   if (element.tag === "sup") lose("superscript");
   if (element.tag === "sub") lose("subscript");
@@ -259,7 +322,7 @@ function renderFlow(nodes: HtmlNode[]): string {
         items.push({ text, paragraph: PARAGRAPH_TAGS.has(node.tag) });
       }
     } else {
-      inline += renderInline(node);
+      inline = joinInline(inline, renderInline(node));
     }
   }
   flush();
@@ -379,14 +442,14 @@ function renderInline(element: HtmlElement): string {
   switch (element.tag) {
     case "b":
     case "strong":
-      return wrap(renderInlineChildren(element.children), "**");
+      return renderEmphasized(element, "bold");
     case "i":
     case "em":
-      return wrap(renderInlineChildren(element.children), "_");
+      return renderEmphasized(element, "italic");
     case "s":
     case "strike":
     case "del":
-      return wrap(renderInlineChildren(element.children), "~~");
+      return renderEmphasized(element, "strike");
     case "code":
     case "kbd":
     case "samp":
@@ -410,15 +473,9 @@ function renderInline(element: HtmlElement): string {
     }
     case "input":
       return "";
-    default: {
+    default:
       // A span's style can carry the emphasis Markdown has, as pasted text does.
-      const emphasis = styledEmphasis(element);
-      let text = renderInlineChildren(element.children);
-      if (emphasis.strike) text = wrap(text, "~~");
-      if (emphasis.italic) text = wrap(text, "_");
-      if (emphasis.bold) text = wrap(text, "**");
-      return text;
-    }
+      return renderEmphasized(element, undefined);
   }
 }
 
@@ -430,7 +487,7 @@ function renderInlineChildren(nodes: HtmlNode[]): string {
       if (isBlock(node.tag)) return `\n${renderBlock(node)}\n`;
       return renderInline(node);
     })
-    .join("");
+    .reduce(joinInline, "");
 }
 
 function renderCodeSpan(code: string): string {

@@ -247,6 +247,38 @@ describe("what a conversion loses", () => {
     ).toEqual({ markdown: "**Warning**, _soon_, ~~never~~", lost: [] });
   });
 
+  it("applies emphasis once, however the HTML nests or repeats it", () => {
+    const convert = (html: string) => htmlToMarkdownWithLosses(html);
+    expect(convert('<span style="font-style:italic"><i>Warning</i></span>')).toEqual({
+      markdown: "_Warning_",
+      lost: [],
+    });
+    expect(convert('<b style="font-style:italic">Warning</b>')).toEqual({
+      markdown: "**_Warning_**",
+      lost: [],
+    });
+    expect(
+      convert('<div><span style="font-weight:bold">Warning</span><span style="font-weight:bold">now</span></div>'),
+    ).toEqual({ markdown: "**Warningnow**", lost: [] });
+    expect(convert("<div><b>One</b><b>Two</b> and <i>three</i><i>four</i></div>")).toEqual({
+      markdown: "**OneTwo** and _threefour_",
+      lost: [],
+    });
+    expect(convert("<div><b>Bold</b> <b>apart</b></div>")).toEqual({
+      markdown: "**Bold** **apart**",
+      lost: [],
+    });
+  });
+
+  it("names emphasis set on a whole block, which Markdown cannot carry across lines", () => {
+    expect(lost('<div style="font-weight: bold">Warning</div>')).toEqual(["bold text"]);
+    expect(lost('<p style="font-style: italic">Aside</p>')).toEqual(["italic text"]);
+  });
+
+  it("keeps an escaped character beside emphasis", () => {
+    expect(htmlToMarkdownWithLosses("<div>a_<i>b</i></div>").markdown).toBe("a\\__b_");
+  });
+
   it("names each loss once", () => {
     expect(lost('<u>a</u><u>b</u><span style="color:red">c</span>')).toEqual(["underline", "text colour"]);
   });
