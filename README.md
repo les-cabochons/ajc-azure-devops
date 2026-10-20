@@ -86,7 +86,10 @@ read (Ajour's ADR 0009):
   in its address as `#ajour-image?width=…`, so a write gives them back. Other
   image styling or attributes, table header cells (a write gives tables none,
   as Azure DevOps' editor does), list numbering styles, runs of blank lines
-  in code and plain text set inside emphasis are named in `lost`.
+  in code, formatting inside code and plain text set inside emphasis are
+  named in `lost`. Any other tag, attribute or style the reader does not
+  know, a style set twice or `!important`, is named "other formatting": only
+  what is known to come back on write leaves a description editable.
 - An HTML description whose Markdown would not write back as itself, through
   the converter `writeDescription` uses, also names "formatting Ajour cannot
   write back" in `lost`, so Ajour keeps it read-only: an edit there would
