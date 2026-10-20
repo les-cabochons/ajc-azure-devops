@@ -82,6 +82,7 @@ function renderEmphasized(
   render: () => string = () => renderInlineChildren(element.children),
 ): string {
   const styled = styledEmphasis(element);
+  noteEmphasisResets(element, tagEmphasis);
   const wanted = new Set<Emphasis>(tagEmphasis ? [tagEmphasis] : []);
   if (styled.bold) wanted.add("bold");
   if (styled.italic) wanted.add("italic");
@@ -133,6 +134,28 @@ function joinInline(left: string, right: string): string {
   return joinedLeft + joinedRight;
 }
 
+/**
+ * Notes a style that turns off emphasis around it, as plain text inside bold:
+ * Markdown cannot end emphasis there, so the text would take it.
+ */
+function noteEmphasisResets(element: HtmlElement, tagEmphasis: Emphasis | undefined) {
+  const style = (element.attrs.style ?? "").toLowerCase().replace(/\s+/g, "");
+  const weight = /(?:^|;)font-weight:([^;]+)/.exec(style)?.[1];
+  const fontStyle = /(?:^|;)font-style:([^;]+)/.exec(style)?.[1];
+  const decoration = /(?:^|;)text-decoration(?:-line)?:([^;]+)/.exec(style)?.[1];
+  const inherited = (value: string) => ["inherit", "initial", "unset"].includes(value);
+  // Emphasis around it, or the element's own tag, as `<b style="font-weight:normal">`.
+  const has = (kind: Emphasis) => activeEmphasis[kind] > 0 || tagEmphasis === kind;
+  const styled = styledEmphasis(element);
+  if (
+    (weight && !inherited(weight) && has("bold") && !styled.bold) ||
+    (fontStyle && !inherited(fontStyle) && has("italic") && !styled.italic) ||
+    (decoration && !inherited(decoration) && has("strike") && !styled.strike)
+  ) {
+    lose("plain text inside emphasis");
+  }
+}
+
 /** The bold, italic and strikethrough an element's style asks for, as Markdown can hold them. */
 function styledEmphasis(element: HtmlElement) {
   const style = (element.attrs.style ?? "").toLowerCase().replace(/\s+/g, "");
@@ -178,14 +201,8 @@ function noteLosses(element: HtmlElement) {
   }
   // Markdown tables have no header cells of their own; the write gives none.
   if (element.tag === "th" || element.tag === "thead") lose("table header cells");
-  if (
-    (element.tag === "ol" && element.attrs.type && element.attrs.type !== "1") ||
-    ((element.tag === "ol" || element.tag === "ul") && has("list-style-type")) ||
-    ((element.tag === "ol" || element.tag === "ul") && has("list-style"))
-  ) {
-    lose("list numbering style");
-  }
-  if (element.tag === "img") noteImageLosses(element, declarations);
+  if (["ol", "ul", "li"].includes(element.tag)) noteListLosses(element, declarations);
+  if (element.tag === "img") noteImageLosses(element);
   if (element.tag === "sup") lose("superscript");
   if (element.tag === "sub") lose("subscript");
   if (element.tag === "mark") lose("highlight");
@@ -236,8 +253,12 @@ function imageSizeStyle(style: string) {
 }
 
 /** Notes what of an image only its address, text and size cannot carry. */
-function noteImageLosses(element: HtmlElement, declarations: Map<string, string>) {
-  for (const [name, value] of declarations) {
+function noteImageLosses(element: HtmlElement) {
+  // Every declaration as written, repeats included: one the size keeps drops
+  // nothing, any other would be lost.
+  for (const declaration of (element.attrs.style ?? "").split(";")) {
+    if (!declaration.trim()) continue;
+    const [name = "", value = ""] = declaration.split(":").map((part) => part.trim().toLowerCase());
     if (!(IMAGE_SIZE_DECLARATION.test(name) && IMAGE_SIZE_VALUE.test(value))) {
       lose("image styling");
       break;
@@ -249,6 +270,23 @@ function noteImageLosses(element: HtmlElement, declarations: Map<string, string>
     } else if (name !== "src" && name !== "alt" && name !== "style") {
       lose("image attributes");
     }
+  }
+  // An address that already holds the size mark could not be told from ours.
+  if (element.attrs.src?.includes(IMAGE_SIZE_MARK)) lose("image attributes");
+}
+
+const LIST_STYLE_DEFAULTS = new Set(["", "inherit", "initial", "unset", "disc", "decimal"]);
+
+/** Notes numbering or markers a list or item sets that Markdown lists cannot. */
+function noteListLosses(element: HtmlElement, declarations: Map<string, string>) {
+  const style = declarations.get("list-style-type") ?? declarations.get("list-style");
+  if (
+    (style !== undefined && !LIST_STYLE_DEFAULTS.has(style)) ||
+    (element.tag === "ol" && element.attrs.type !== undefined && element.attrs.type !== "1") ||
+    (element.tag === "ol" && "reversed" in element.attrs) ||
+    (element.tag === "li" && element.attrs.value !== undefined)
+  ) {
+    lose("list numbering style");
   }
 }
 
@@ -469,11 +507,22 @@ function renderList(list: HtmlElement): string {
 }
 
 function renderListItem(item: HtmlElement): string {
+  // An item's lines join without blank lines, so code in it would lose its own.
+  if (hasCodeWithBlankLine(item, /\n[ \t]*\n/)) lose("blank lines in code");
   return renderFlow(item.children).replace(/\n{2,}/g, "\n");
+}
+
+/** Whether preformatted code inside holds a run of blank lines like `pattern`. */
+function hasCodeWithBlankLine(element: HtmlElement, pattern: RegExp): boolean {
+  return elementsOf(element.children).some((child) =>
+    child.tag === "pre" ? pattern.test(textContent(child).replace(/^\n|\n+$/g, "")) : hasCodeWithBlankLine(child, pattern),
+  );
 }
 
 function renderCodeBlock(element: HtmlElement): string {
   const code = textContent(element).replace(/^\n/, "").replace(/\n+$/, "");
+  // The Markdown keeps one blank line at most, in code too.
+  if (/\n[ \t]*\n[ \t]*\n/.test(code)) lose("blank lines in code");
   if (code.trim().length === 0) {
     return "";
   }

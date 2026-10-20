@@ -257,6 +257,35 @@ describe("what a conversion loses", () => {
     ]);
   });
 
+  it("names list numbering Markdown lists cannot carry", () => {
+    expect(lost("<ol reversed><li>A</li><li>B</li></ol>")).toEqual(["list numbering style"]);
+    expect(lost('<ol><li>A</li><li value="8">B</li></ol>')).toEqual(["list numbering style"]);
+    expect(lost('<ul><li style="list-style-type: none">A</li></ul>')).toEqual(["list numbering style"]);
+    expect(lost('<ul style="list-style-type: disc"><li>A</li></ul><ol type="1"><li>B</li></ol>')).toEqual([]);
+  });
+
+  it("names blank lines in code that the Markdown cannot keep", () => {
+    expect(lost("<pre>line 1\n\n\nline 2</pre>")).toEqual(["blank lines in code"]);
+    expect(lost("<pre>line 1\n\nline 2</pre>")).toEqual([]);
+    expect(lost("<ul><li>Run<pre>a\n\nb</pre></li></ul>")).toEqual(["blank lines in code"]);
+  });
+
+  it("names plain text set inside emphasis, which the Markdown would emphasize", () => {
+    expect(lost('<b>first <span style="font-weight: normal">plain</span> last</b>')).toEqual([
+      "plain text inside emphasis",
+    ]);
+    expect(lost('<i>a <span style="font-style: normal">b</span></i>')).toEqual(["plain text inside emphasis"]);
+    expect(lost('<b style="font-weight: normal">not bold</b>')).toEqual(["plain text inside emphasis"]);
+    expect(lost('<span style="font-weight: normal">plain</span> <b style="font-weight: 700">bold</b>')).toEqual([]);
+  });
+
+  it("names image styling hidden by a repeated declaration, and an address holding the size mark", () => {
+    expect(lost('<img src="https://e.test/a.png" style="width:50% !important;width:80%">')).toEqual([
+      "image styling",
+    ]);
+    expect(lost('<img src="https://e.test/a.svg#ajour-image?width=120">')).toEqual(["image attributes"]);
+  });
+
   it("carries an image's size in its address, and names other image styling", () => {
     expect(
       htmlToMarkdownWithLosses('<img src="https://e.test/x.png" alt="X" width="120" height="80" style="max-width: 50%">'),
