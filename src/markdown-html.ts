@@ -6,6 +6,8 @@
 // text, never passed through. A blank line ends a list, as html-markdown.ts
 // writes two lists apart, so HTML → Markdown → HTML → Markdown is stable.
 
+import { decodeHtmlEntities } from "./html-markdown.js";
+
 type Block =
   | { kind: "paragraph"; lines: string[] }
   | { kind: "heading"; level: number; text: string }
@@ -283,13 +285,17 @@ function renderItem(blocks: Block[]): string {
  * backslash mark a hard break, which every break already is.
  */
 function renderLines(lines: string[]) {
-  return lines
-    .map((line) => {
-      const text = line.trim();
-      const hardBreak = text.endsWith("\\") && !isEscapedAt(text, text.length - 1);
-      return renderInline(hardBreak ? text.slice(0, -1) : text);
-    })
-    .join("<br>");
+  return renderInline(
+    lines
+      .map((line, index) => {
+        const text = line.trim();
+        // Only a backslash a line break follows is a hard break.
+        const hardBreak =
+          index < lines.length - 1 && text.endsWith("\\") && !isEscapedAt(text, text.length - 1);
+        return hardBreak ? text.slice(0, -1) : text;
+      })
+      .join("\n"),
+  );
 }
 
 function escapeHtml(text: string) {
@@ -297,6 +303,9 @@ function escapeHtml(text: string) {
 }
 
 const ESCAPABLE = /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/;
+
+/** A named or numeric character reference, as CommonMark reads one. */
+const ENTITY = /^&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});/;
 
 type Inline =
   | { kind: "html"; html: string }
@@ -320,6 +329,21 @@ export function renderInline(text: string): string {
   let at = 0;
   while (at < text.length) {
     const char = text[at]!;
+
+    if (char === "\n") {
+      tokens.push({ kind: "html", html: "<br>" });
+      at += 1;
+      continue;
+    }
+
+    if (char === "&") {
+      const entity = ENTITY.exec(text.slice(at));
+      if (entity) {
+        pushText(decodeHtmlEntities(entity[0]));
+        at += entity[0].length;
+        continue;
+      }
+    }
 
     if (char === "\\" && at + 1 < text.length && ESCAPABLE.test(text[at + 1]!)) {
       pushText(text[at + 1]!);
@@ -347,7 +371,7 @@ export function renderInline(text: string): string {
     if (char === "!" && text[at + 1] === "[") {
       const link = parseLink(text, at + 1);
       if (link) {
-        const alt = escapeHtml(unescapeMarkdown(link.label));
+        const alt = escapeHtml(decodeHtmlEntities(unescapeMarkdown(link.label)));
         tokens.push({
           kind: "html",
           html: isSafeUrl(link.url) ? `<img src="${escapeHtml(link.url)}" alt="${alt}">` : alt,
@@ -424,6 +448,9 @@ export function renderInline(text: string): string {
 
 /** Whether an address is web, mail or relative, never a script or data. */
 function isSafeUrl(url: string) {
+  // A browser drops control characters, and tabs and newlines anywhere, before
+  // it reads the scheme, so any of them could hide one.
+  if (/[\u0000-\u001F\u007F]/.test(url)) return false;
   const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(url.trim())?.[1]?.toLowerCase();
   return scheme === undefined || scheme === "http" || scheme === "https" || scheme === "mailto";
 }
@@ -465,16 +492,69 @@ function parseLink(text: string, open: number) {
     }
   }
   if (close === -1 || text[close + 1] !== "(") return undefined;
-  const target = /^\(\s*(<[^<>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:\s+("[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/.exec(
-    text.slice(close + 1),
-  );
-  if (!target) return undefined;
-  const url = target[1]!.startsWith("<") ? target[1]!.slice(1, -1) : target[1]!;
+  const destination = parseDestination(text, close + 2);
+  if (!destination) return undefined;
   return {
     label: text.slice(open + 1, close),
-    url: unescapeMarkdown(url),
-    end: close + 1 + target[0].length,
+    url: decodeHtmlEntities(unescapeMarkdown(destination.url)),
+    end: destination.end,
   };
+}
+
+/**
+ * A link's destination and optional title from `from`, just after its `(`,
+ * as CommonMark reads them: in angle brackets, or up to a space with escapes
+ * and balanced parentheses. Undefined when no `)` closes it.
+ */
+function parseDestination(text: string, from: number) {
+  let at = from;
+  const skipSpaces = () => {
+    while (at < text.length && /[ \t\n]/.test(text[at]!)) at += 1;
+  };
+  skipSpaces();
+  let url = "";
+  if (text[at] === "<") {
+    at += 1;
+    while (at < text.length && text[at] !== ">") {
+      if (text[at] === "\n" || text[at] === "<") return undefined;
+      if (text[at] === "\\" && at + 1 < text.length) {
+        url += text.slice(at, at + 2);
+        at += 2;
+        continue;
+      }
+      url += text[at];
+      at += 1;
+    }
+    if (text[at] !== ">") return undefined;
+    at += 1;
+  } else {
+    let depth = 0;
+    while (at < text.length) {
+      const char = text[at]!;
+      if (char === "\\" && at + 1 < text.length && ESCAPABLE.test(text[at + 1]!)) {
+        url += text.slice(at, at + 2);
+        at += 2;
+        continue;
+      }
+      if (/[\s\u0000-\u001F]/.test(char)) break;
+      if (char === "(") depth += 1;
+      if (char === ")") {
+        if (depth === 0) break;
+        depth -= 1;
+      }
+      url += char;
+      at += 1;
+    }
+    if (depth !== 0) return undefined;
+  }
+  skipSpaces();
+  const title = /^(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\))/.exec(text.slice(at));
+  if (title && /[ \t\n]/.test(text[at - 1] ?? "")) {
+    at += title[0].length;
+    skipSpaces();
+  }
+  if (text[at] !== ")") return undefined;
+  return { url, end: at + 1 };
 }
 
 function unescapeMarkdown(text: string) {

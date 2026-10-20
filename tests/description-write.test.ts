@@ -168,13 +168,55 @@ describe("writeDescription", () => {
     expect(patches).toEqual([]);
   });
 
-  it("refuses to write over a description longer than Ajour keeps", async () => {
+  it("answers a conflict, cut as it is, when the description grew past what Ajour keeps", async () => {
     const item = { rev: 1, description: `<div>${"word ".repeat(13_000)}</div>` };
     const patches = stubAzure(item);
 
-    await expect(
-      writeDescription(connection, { sourceId: SOURCE_ID, text: "Mine", expected: "anything" }),
-    ).rejects.toThrow("longer than Ajour keeps");
+    const result = await writeDescription(connection, {
+      sourceId: SOURCE_ID,
+      text: "Mine",
+      expected: "Old plan",
+    });
+    expect(result.outcome).toBe("conflict");
+    expect(result.description.cut).toBe(true);
     expect(patches).toEqual([]);
+  });
+
+  it("writes nothing over formatting a colleague added to the same text", async () => {
+    const item = { rev: 2, description: "<div><u>Old plan</u></div>" };
+    const patches = stubAzure(item);
+
+    await expect(
+      writeDescription(connection, { sourceId: SOURCE_ID, text: "Mine", expected: "Old plan" }),
+    ).rejects.toThrow("Writing it would lose its underline in Azure DevOps");
+    expect(patches).toEqual([]);
+  });
+
+  it("passes on a refused write even when the item changed meanwhile", async () => {
+    const item = { rev: 4, description: "<div>Old plan</div>" };
+    stubAzure(item, {
+      changeBeforePatch: "<div>Changed meanwhile</div>",
+      refuse: json({ message: "TF401027: You need the Edit work items permission." }, 403),
+    });
+
+    await expect(
+      writeDescription(connection, { sourceId: SOURCE_ID, text: "Mine", expected: "Old plan" }),
+    ).rejects.toThrow("You need the Edit work items permission");
+  });
+
+  it("keeps a mention written as an example in code as written", async () => {
+    const item = { rev: 3, description: "Old", markdown: true };
+    const patches = stubAzure(item);
+
+    await writeDescription(connection, {
+      sourceId: SOURCE_ID,
+      text: `Write \`[@Ana](mention:${ANA})\` to mention [@Ana Silva](mention:${ANA})\n\n\`\`\`\n[@Ana](mention:${ANA})\n\`\`\``,
+      expected: "Old",
+    });
+    expect(patches[0]![1]).toEqual({
+      op: "add",
+      path: "/fields/System.Description",
+      value: `Write \`[@Ana](mention:${ANA})\` to mention @<${ANA}>\n\n\`\`\`\n[@Ana](mention:${ANA})\n\`\`\``,
+    });
   });
 });

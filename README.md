@@ -83,6 +83,10 @@ read (Ajour's ADR 0009):
   cells. Bold, italic and strikethrough set by a style become Markdown
   emphasis. Images are kept as Markdown images with their attachment address
   and never count as lost.
+- An HTML description whose Markdown would not write back as itself, through
+  the converter `writeDescription` uses, also names "formatting Ajour cannot
+  write back" in `lost`, so Ajour keeps it read-only: an edit there would
+  change parts the user never touched.
 - A description stored as Markdown is kept as written, with nothing lost.
 - Mentions become `[@Name](mention:<identity id>)`, as in comments. A
   Markdown description names people only by id, so its mentions show the
@@ -100,9 +104,11 @@ write):
 
 - It reads the item with its revision. If its description, converted as a
   sync converts it, is no longer Ajour's `expected` text, it writes nothing
-  and answers `conflict` with the current description.
+  and answers `conflict` with the current description. If the text is the
+  same but now cut or lossy, as after a colleague added formatting, it writes
+  nothing and says why.
 - An item that stores its description as Markdown gets Markdown, with
-  mentions as `@<identity id>`. Any other gets HTML from a dependency-free
+  mentions outside code as `@<identity id>`. Any other gets HTML from a dependency-free
   converter for the Markdown above and the CommonMark people type: headings,
   paragraphs whose line breaks stay line breaks, lists, quotes, code, rules,
   tables, links, images, emphasis, strikethrough and mentions as
@@ -111,8 +117,8 @@ write):
   Markdown returns the same Markdown.
 - Converted text over 1,000,000 characters is refused with the count.
 - The patch tests the revision it read, so a change made in between answers
-  `conflict` rather than being written over.
-- A description longer than Ajour keeps is never written over.
+  `conflict` rather than being written over. Any other refusal, such as a
+  missing permission, is passed on as it is.
 
 ## Comments
 

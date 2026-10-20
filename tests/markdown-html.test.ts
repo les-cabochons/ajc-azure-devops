@@ -88,6 +88,35 @@ describe("markdownToHtml", () => {
     );
   });
 
+  it("never lets a control character hide an unsafe address", () => {
+    expect(markdownToHtml("[click](<\u0001javascript:alert(1)>) ![x](<\u0001data:text/html;base64,AA>)")).toBe(
+      "<p>click x</p>",
+    );
+    expect(markdownToHtml("[x](javascript&#58;alert(1))")).toBe("<p>x</p>");
+  });
+
+  it("reads emphasis and code across a paragraph's line breaks", () => {
+    expect(markdownToHtml("**A\nB** and `two\nlines`")).toBe(
+      "<p><strong>A<br>B</strong> and <code>two lines</code></p>",
+    );
+  });
+
+  it("keeps a backslash no line break follows", () => {
+    expect(markdownToHtml("a\\\nb\\")).toBe("<p>a<br>b\\</p>");
+  });
+
+  it("decodes character references outside code", () => {
+    expect(markdownToHtml("a &#65; &amp; &copy; `&#65;` [x](https://e.test/?a=1&amp;b=2)")).toBe(
+      '<p>a A &amp; &amp;copy; <code>&amp;#65;</code> <a href="https://e.test/?a=1&amp;b=2">x</a></p>',
+    );
+  });
+
+  it("reads link addresses with escapes, nested parentheses and titles", () => {
+    expect(markdownToHtml("[a](x\\)y) [b](https://e.test/a(b(c))) [c](https://e.test \"Title\")")).toBe(
+      '<p><a href="x)y">a</a> <a href="https://e.test/a(b(c))">b</a> <a href="https://e.test">c</a></p>',
+    );
+  });
+
   it("starts an ordered list where its first number says", () => {
     expect(markdownToHtml("3. three\n4. four")).toBe('<ol start="3"><li>three</li><li>four</li></ol>');
   });

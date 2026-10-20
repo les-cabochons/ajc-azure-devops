@@ -159,6 +159,20 @@ describe("descriptions a sync sends", () => {
   });
 });
 
+describe("descriptions Ajour cannot write back as they are", () => {
+  it("names a description whose Markdown would not write back as itself", async () => {
+    const candidate = await candidateFor("<div>a<i>x</i>b</div>");
+
+    expect(candidate.description?.lost).toEqual(["formatting Ajour cannot write back"]);
+  });
+
+  it("leaves a description that writes back as itself editable", async () => {
+    const candidate = await candidateFor("<div><b>Plan</b></div><ul><li>One</li></ul>");
+
+    expect(candidate.description).toEqual({ text: "**Plan**\n\n- One" });
+  });
+});
+
 describe("readDescription", () => {
   const connection = {
     id: "connection-1",

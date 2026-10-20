@@ -17,6 +17,11 @@ export const AZURE_DESCRIPTION_MAX_LENGTH = 1_000_000;
 
 const DESCRIPTION_FIELDS = "System.Description,System.AssignedTo";
 
+/** Whether a refused patch is how Azure DevOps answers a failed test operation. */
+function isRevisionTestFailure(error: unknown) {
+  return error instanceof Error && /request failed \((?:400|409|412)\)/.test(error.message);
+}
+
 function requireWorkItemId(config: AzureDevOpsConnectionInput, sourceId: string) {
   const id = parseAzureWorkItemId(sourceId, config.organizationUrl);
   if (id === null) {
@@ -46,11 +51,17 @@ export async function writeAzureDescription(
   const id = requireWorkItemId(config, request.sourceId);
   const workItem = await fetchDescription(config, id);
   const current = describeWorkItem(workItem);
-  if (current.cut) {
-    throw new Error("This description is longer than Ajour keeps. Edit it in Azure DevOps.");
-  }
   if (current.text !== request.expected) {
     return { outcome: "conflict", description: current };
+  }
+  // The same text can come from formatting a colleague added since Ajour read
+  // it, which the write would erase.
+  if (current.cut || current.lost?.length) {
+    throw new Error(
+      current.cut
+        ? "This description is longer than Ajour keeps. Edit it in Azure DevOps."
+        : `Writing it would lose its ${current.lost!.join(", ")} in Azure DevOps. Edit it there.`,
+    );
   }
 
   const markdown = isMarkdownField(workItem, "System.Description");
@@ -80,7 +91,9 @@ export async function writeAzureDescription(
       },
     );
   } catch (error) {
-    // A failed revision test: someone changed the item in between.
+    // A failed revision test, as Azure DevOps answers one: someone changed the
+    // item in between. Any other refusal, such as a missing permission, stays.
+    if (!isRevisionTestFailure(error)) throw error;
     const now = await fetchDescription(config, id).catch(() => undefined);
     if (now && typeof now.rev === "number" && now.rev !== workItem.rev) {
       return { outcome: "conflict", description: describeWorkItem(now) };
