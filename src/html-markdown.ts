@@ -571,7 +571,7 @@ function flowItems(nodes: HtmlNode[]): FlowItem[] {
         items.push({ text, paragraph: PARAGRAPH_TAGS.has(node.tag), spaced, first: index, last: index });
         spaced = false;
         emptyLines = 0;
-      } else if (LINE_TAGS.has(node.tag)) {
+      } else if (LINE_TAGS.has(node.tag) || node.tag === "p") {
         // An empty line of the editor sets the lines around it apart.
         if (items.length > 0) spaced = true;
         emptyLines += 1;
@@ -838,7 +838,10 @@ function noteCodeFormatting(element: HtmlElement) {
 
 function renderCodeBlock(element: HtmlElement): string {
   noteCodeFormatting(element);
-  const text = textContent(element).replace(/^\n/, "");
+  // Only a newline right after `<pre>` is markup; one inside `<code>` is code.
+  const first = element.children[0];
+  const all = textContent(element);
+  const text = first?.kind === "text" && first.text.startsWith("\n") ? all.slice(1) : all;
   // A newline before the end tag shows nothing; more show empty lines.
   if (/\n[ \t]*\n$/.test(text)) lose("blank lines in code");
   const code = text.replace(/\n+$/, "");
@@ -925,7 +928,10 @@ function renderInline(element: HtmlElement): string {
         if (element.attrs.style?.trim() || hasFormattingInside(element)) {
           lose("other formatting");
         }
-        const name = textContent(element).trim().replace(/^@/, "").replace(/[[\]\\]/g, "");
+        const fullName = textContent(element).trim().replace(/^@/, "");
+        // A mention's name in Ajour holds no brackets or backslashes.
+        if (/[[\]\\]/.test(fullName)) lose("mention names Ajour cannot keep");
+        const name = fullName.replace(/[[\]\\]/g, "");
         return `[@${name || "someone"}](mention:${mention[1]!.toLowerCase()})`;
       }
       // A link's own style, such as a struck-out old link, goes inside its text.

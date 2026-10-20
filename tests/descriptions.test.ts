@@ -372,6 +372,15 @@ describe("what a conversion loses", () => {
     expect((await candidateFor("A\r\nB", "Markdown")).description?.lost).toBeUndefined();
   });
 
+  it("counts empty paragraphs as empty lines, keeps a newline inside code, and names bracketed mention names", () => {
+    expect(lost("<blockquote><p><br></p><div>A</div><div>B</div></blockquote>")).toEqual(["extra blank lines"]);
+    expect(htmlToMarkdownWithLosses("<pre><code>\nA\nB</code></pre>")).toEqual({ markdown: "```\n\nA\nB\n```", lost: [] });
+    expect(htmlToMarkdownWithLosses("<pre>\nA\nB</pre>").markdown).toBe("```\nA\nB\n```");
+    expect(
+      lost('<a href="#" data-vss-mention="version:2.0,0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d">@Ana [External]</a>'),
+    ).toEqual(["mention names Ajour cannot keep"]);
+  });
+
   it("names formatting anywhere inside a mention", () => {
     expect(
       lost(
