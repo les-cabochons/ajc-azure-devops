@@ -545,11 +545,21 @@ function flowItems(nodes: HtmlNode[]): FlowItem[] {
       lose("extra blank lines");
     }
     if (text.length > 0) {
+      noteEmptyLines();
       items.push({ text, paragraph: false, spaced, first: inlineFirst, last });
       spaced = false;
+      emptyLines = 0;
     }
     inline = "";
     inlineFirst = -1;
+  };
+  // Only the top level keeps the HTML between blocks, with each of several
+  // empty lines, and around its first and last; inside a block, several
+  // empty lines in a row become one, and those at its edges go.
+  const noteEmptyLines = () => {
+    if (flowDepth > 1 && (emptyLines > 1 || (emptyLines > 0 && items.length === 0))) {
+      lose("extra blank lines");
+    }
   };
 
   nodes.forEach((node, index) => {
@@ -557,15 +567,13 @@ function flowItems(nodes: HtmlNode[]): FlowItem[] {
       flush(index - 1);
       const text = renderBlock(node);
       if (trimSpaces(text).length > 0) {
-        // Only the top level keeps the HTML between blocks, with each of
-        // several empty lines; inside a block they become one.
-        if (emptyLines > 1 && flowDepth > 1) lose("extra blank lines");
+        noteEmptyLines();
         items.push({ text, paragraph: PARAGRAPH_TAGS.has(node.tag), spaced, first: index, last: index });
         spaced = false;
         emptyLines = 0;
-      } else if (LINE_TAGS.has(node.tag) && items.length > 0) {
+      } else if (LINE_TAGS.has(node.tag)) {
         // An empty line of the editor sets the lines around it apart.
-        spaced = true;
+        if (items.length > 0) spaced = true;
         emptyLines += 1;
       }
       return;
@@ -580,6 +588,7 @@ function flowItems(nodes: HtmlNode[]): FlowItem[] {
     }
   });
   flush(nodes.length - 1);
+  if (emptyLines > 0 && flowDepth > 1 && items.length > 0) lose("extra blank lines");
   flowDepth -= 1;
   return items;
 }
@@ -691,6 +700,17 @@ function finishPart(text: string, first: boolean, last: boolean) {
   return finished;
 }
 
+/**
+ * Notes an address the Markdown would change: a browser drops tabs and
+ * newlines in it, which the Markdown would encode, and keeps other spaces at
+ * its edges, which the Markdown would trim.
+ */
+function noteAddress(address: string) {
+  if (/[\t\n\r]/.test(address) || address.trim() !== trimSpaces(address)) {
+    lose("link addresses Ajour cannot keep");
+  }
+}
+
 /** Whether an element holds a line break. */
 function hasBreak(element: HtmlElement): boolean {
   return elementsOf(element.children).some((child) => child.tag === "br" || hasBreak(child));
@@ -714,11 +734,12 @@ function renderBlock(element: HtmlElement): string {
       // A heading is bold by default, so its own normal weight is lost too.
       noteEmphasisResets(element, "bold");
       // A Markdown heading is one line.
-      if (hasBreak(element)) lose("line breaks in headings");
       headingDepth += 1;
       let text: string;
       try {
-        text = singleLine(renderFlow(element.children));
+        const lines = renderFlow(element.children);
+        if (hasBreak(element) || lines.includes("\n")) lose("line breaks in headings");
+        text = singleLine(lines);
       } finally {
         headingDepth -= 1;
       }
@@ -910,6 +931,7 @@ function renderInline(element: HtmlElement): string {
       // A link's own style, such as a struck-out old link, goes inside its text.
       const text = renderEmphasized(element, undefined);
       const href = element.attrs.href?.trim();
+      if (href !== undefined) noteAddress(element.attrs.href!);
       if (!href || trimSpaces(text).length === 0) return text;
       // The spaces at the link's edges stay text beside it.
       const [, before = "", label = "", after = ""] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text) ?? [];
@@ -917,10 +939,11 @@ function renderInline(element: HtmlElement): string {
     }
     case "img": {
       const src = element.attrs.src?.trim();
+      if (src !== undefined) noteAddress(element.attrs.src!);
       if (!src) return "";
       const size = imageSize(element);
       const address = size ? `${src}${IMAGE_SIZE_MARK}${size}` : src;
-      return `![${escapeText(element.attrs.alt?.trim() ?? "")}](${encodeUrl(address)})`;
+      return `![${escapeText(collapseWhitespace(trimSpaces(element.attrs.alt ?? "")))}](${encodeUrl(address)})`;
     }
     case "input":
       return "";

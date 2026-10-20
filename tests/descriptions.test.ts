@@ -339,6 +339,39 @@ describe("what a conversion loses", () => {
     expect(lost("<div>&notarealname; 2026</div>")).toEqual(["characters Ajour cannot read"]);
   });
 
+  it("names empty lines at the edges of a block, or several before a line, but not apart ones", () => {
+    expect(lost("<blockquote><div>A</div><div><br></div></blockquote>")).toEqual(["extra blank lines"]);
+    expect(lost("<blockquote><div><br></div><div>A</div></blockquote>")).toEqual(["extra blank lines"]);
+    expect(lost("<blockquote><div>A</div><div><br></div><div><br></div>B</blockquote>")).toEqual([
+      "extra blank lines",
+    ]);
+    expect(lost("<blockquote><div>A</div><div><br></div>B<div><br></div><div>C</div></blockquote>")).toEqual([]);
+    // The top level keeps them, with the HTML around its blocks.
+    expect(lost("<div><br></div><div>A</div><div><br></div>")).toEqual([]);
+  });
+
+  it("names a line break a heading gets from a block, and addresses the Markdown would change", () => {
+    expect(lost("<h2>A<div>B</div></h2>")).toEqual(["line breaks in headings"]);
+    expect(lost('<a href="https://e.test/a&#9;b">Link</a>')).toEqual(["link addresses Ajour cannot keep"]);
+    expect(lost('<img src="https://e.test/x&#160;">')).toEqual(["link addresses Ajour cannot keep"]);
+    expect(lost('<a href=" https://e.test/a b ">Link</a>')).toEqual([]);
+  });
+
+  it("keeps non-breaking spaces in an image's text", () => {
+    expect(htmlToMarkdownWithLosses('<img src="x" alt="&#160;Label&#160;">')).toEqual({
+      markdown: "![ Label ](x)",
+      lost: [],
+    });
+  });
+
+  it("names a Markdown description's mixed or old line endings", async () => {
+    expect((await candidateFor("A\r\nB\nC", "Markdown")).description?.lost).toEqual([
+      "line endings Ajour cannot keep",
+    ]);
+    expect((await candidateFor("A\rB", "Markdown")).description?.lost).toEqual(["line endings Ajour cannot keep"]);
+    expect((await candidateFor("A\r\nB", "Markdown")).description?.lost).toBeUndefined();
+  });
+
   it("names formatting anywhere inside a mention", () => {
     expect(
       lost(

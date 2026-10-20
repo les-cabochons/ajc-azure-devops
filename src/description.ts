@@ -77,6 +77,11 @@ export function describeWorkItem(workItem: AzureWorkItem): ConnectorSyncedDescri
       // Ids are compared as the write gives them: lower case, as in Ajour.
       const asWritten = replaceOutsideCode(source, MARKDOWN_MENTION, (_match, id: string) => `@<${id.toLowerCase()}>`);
       if (toAzureMarkdown(text) !== asWritten) lost = [NOT_WRITABLE_EXACTLY];
+      // A write gives every line the source's one line ending, so a mix, or
+      // old Mac endings, would change.
+      if (/\r(?!\n)/.test(value) || (value.includes("\r\n") && /(?:^|[^\r])\n/.test(value))) {
+        lost = [...lost, "line endings Ajour cannot keep"];
+      }
     } else {
       const converted = htmlToMarkdownWithLosses(value);
       text = converted.markdown ?? "";
