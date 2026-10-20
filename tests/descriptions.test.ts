@@ -460,6 +460,14 @@ describe("what a conversion loses", () => {
     expect(lost("<div><div>A</div><div><br></div><div><br></div><div>Else</div></div>")).toEqual([]);
   });
 
+  it("escapes a ! right before a link, and names a code block of spaces alone", () => {
+    expect(htmlToMarkdownWithLosses('<div>!<a href="https://e.test">Reference</a> Wow!</div>')).toEqual({
+      markdown: "\\![Reference](https://e.test) Wow!",
+      lost: [],
+    });
+    expect(lost("<blockquote><pre><code>   </code></pre><div>Else</div></blockquote>")).toEqual(["other formatting"]);
+  });
+
   it("names emphasis turned off on code inside emphasis", () => {
     expect(lost('<b><code style="font-weight: normal">A</code></b>')).toContain("plain text inside emphasis");
     expect(lost('<i><code style="font-style: normal">A</code></i>')).toContain("plain text inside emphasis");

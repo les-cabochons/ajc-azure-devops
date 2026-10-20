@@ -124,6 +124,10 @@ function isEscaped(text: string, index: number) {
 function joinInline(left: string, right: string): string {
   let joinedLeft = left;
   let joinedRight = right;
+  // A `!` of the text right before a link would make it an image.
+  if (joinedRight.startsWith("[") && joinedLeft.endsWith("!") && !isEscaped(joinedLeft, joinedLeft.length - 1)) {
+    joinedLeft = `${joinedLeft.slice(0, -1)}\\!`;
+  }
   for (let merged = true; merged; ) {
     merged = false;
     for (const marker of ["**", "~~", "_"]) {
@@ -887,6 +891,8 @@ function renderCodeBlock(element: HtmlElement): string {
   // The Markdown keeps one blank line at most, in code too.
   if (/\n[ \t]*\n[ \t]*\n/.test(code)) lose("blank lines in code");
   if (code.trim().length === 0) {
+    // Code of spaces alone has no Markdown block; it would go.
+    if (code.length > 0) lose("other formatting");
     return "";
   }
   const fence = "`".repeat(Math.max(3, longestRun(code, "`") + 1));
