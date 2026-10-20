@@ -193,7 +193,7 @@ function noteLosses(element: HtmlElement, ancestors: HtmlElement[]) {
   if (has("background-color") || has("background")) lose("highlight");
   // Code keeps its own font family as a code span or block, but not its size.
   if (
-    (has("font-family") && !CODE_TAGS.has(element.tag)) ||
+    has("font-family") ||
     has("font-size") ||
     (element.tag === "font" && (element.attrs.face || element.attrs.size))
   ) {
@@ -228,7 +228,11 @@ function noteLosses(element: HtmlElement, ancestors: HtmlElement[]) {
   if (element.tag === "u" || element.tag === "ins" || decoration.includes("underline")) lose("underline");
   const alignment = declarations.get("text-align") ?? element.attrs.align?.toLowerCase() ?? "";
   if (!["", "left", "start", "inherit", "initial", "unset"].includes(alignment)) lose("text alignment");
-  if (element.tag === "input" && (element.attrs.type ?? "").toLowerCase() === "checkbox") lose("checkboxes");
+  const inputType = (element.attrs.type ?? "").toLowerCase();
+  if (element.tag === "input" && inputType === "checkbox") lose("checkboxes");
+  else if (["input", "select", "textarea", "button"].includes(element.tag) && inputType !== "hidden") {
+    lose("form fields");
+  }
   if (["iframe", "video", "audio", "object", "embed"].includes(element.tag)) lose("embedded content");
   if (
     (element.tag === "td" || element.tag === "th") &&
@@ -267,10 +271,10 @@ const TAG_ATTRIBUTES: Record<string, string[]> = {
 // 400, italic, and strikethrough. A lighter, semi-bold or relative weight, an
 // oblique style, or a decoration turned off, as on a link, looks otherwise.
 const EMPHASIS_VALUES: Record<string, RegExp> = {
-  "font-weight": /^(?:bold|normal|400|700|inherit|initial|unset)$/,
-  "font-style": /^(?:normal|italic|inherit|initial|unset)$/,
-  "text-decoration": /^(?:(?:line-through|underline)\s*)+$|^(?:inherit|unset)$/,
-  "text-decoration-line": /^(?:(?:line-through|underline)\s*)+$|^(?:inherit|unset)$/,
+  "font-weight": /^(?:bold|normal|400|700)$/,
+  "font-style": /^(?:normal|italic)$/,
+  "text-decoration": /^(?:(?:line-through|underline)\s*)+$/,
+  "text-decoration-line": /^(?:(?:line-through|underline)\s*)+$/,
 };
 
 /** Style properties read, or named as lost elsewhere, when written plainly. */
@@ -310,6 +314,9 @@ function noteUnknownFormatting(element: HtmlElement) {
     if (
       repeated ||
       value.includes("!important") ||
+      // A value taken from around the element looks as its surroundings do,
+      // which a write does not keep.
+      /^(?:inherit|initial|unset|revert|revert-layer)$/.test(value) ||
       !(NAMED_STYLE_PROPERTIES.has(name) || EMPHASIS_VALUES[name]?.test(value))
     ) {
       lose("other formatting");
@@ -423,7 +430,8 @@ function parseHtml(html: string): HtmlNode[] {
     stack.length = length;
   };
   const stack: HtmlElement[] = [root];
-  const tokens = /<!--[\s\S]*?-->|<![^>]*>|<\/?[a-zA-Z][^>]*>/g;
+  // A `>` inside a quoted attribute value does not end the tag.
+  const tokens = /<!--[\s\S]*?-->|<![^>]*>|<\/?[a-zA-Z](?:[^>"']|"[^"]*"|'[^']*')*>/g;
   const current = () => stack[stack.length - 1] ?? root;
 
   let position = 0;
@@ -941,6 +949,8 @@ function renderInline(element: HtmlElement): string {
       const text = renderEmphasized(element, undefined);
       const href = element.attrs.href?.trim();
       if (href !== undefined) noteAddress(element.attrs.href!);
+      // An empty address links to the page itself, which Markdown cannot write.
+      if (href === "" && trimSpaces(text).length > 0) lose("other formatting");
       if (!href || trimSpaces(text).length === 0) return text;
       // The spaces at the link's edges stay text beside it.
       const [, before = "", label = "", after = ""] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text) ?? [];

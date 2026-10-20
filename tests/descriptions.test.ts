@@ -279,9 +279,10 @@ describe("what a conversion loses", () => {
     expect(lost('<p style="text-align: end">Right side</p>')).toEqual(["text alignment"]);
     expect(lost('<p style="text-align: left">Left</p>')).toEqual([]);
     expect(lost('<span style="color: transparent">Hidden</span>')).toEqual(["text colour"]);
-    expect(lost('<span style="color: inherit">Plain</span>')).toEqual([]);
+    // A colour taken from around it looks as its surroundings do, which a write does not keep.
+    expect(lost('<span style="color: inherit">Plain</span>')).toEqual(["other formatting"]);
     expect(lost('<pre style="font-size: 48px">Large code</pre>')).toEqual(["font"]);
-    expect(lost('<pre style="font-family: Consolas">Code</pre>')).toEqual([]);
+    expect(lost('<pre style="font-family: Consolas">Code</pre>')).toEqual(["font"]);
     expect(lost('<span style="text-decoration: line-through; text-decoration-line: none">Current</span>')).toContain(
       "other formatting",
     );
@@ -389,6 +390,18 @@ describe("what a conversion loses", () => {
     expect(lost('<span style="font-weight: 700">Bold</span> <span style="font-style: italic">i</span>')).toEqual([]);
   });
 
+  it("reads a quoted > in an attribute as part of the tag, and names resets, empty links and form fields", () => {
+    expect(htmlToMarkdownWithLosses('<div>Before <a href="https://e.test" title=">">Reference</a></div>')).toEqual({
+      markdown: "Before [Reference](https://e.test)",
+      lost: [],
+    });
+    expect(lost('<b style="font-weight: inherit">plain</b>')).toContain("other formatting");
+    expect(lost('<h1>Before <span style="font-size: initial">small</span></h1>')).toContain("other formatting");
+    expect(lost('<code style="font-family: serif">sample</code>')).toEqual(["font"]);
+    expect(lost('<a href="">Reference</a>')).toEqual(["other formatting"]);
+    expect(lost('<input type="text"> <select></select> <input type="hidden">')).toContain("form fields");
+  });
+
   it("names formatting anywhere inside a mention", () => {
     expect(
       lost(
@@ -433,9 +446,9 @@ describe("what a conversion loses", () => {
   });
 
   it("turns emphasis off with initial, and keeps a list starting at zero", () => {
-    expect(lost('<b>bold <span style="font-weight: initial">plain</span></b>')).toEqual([
+    expect(lost('<b>bold <span style="font-weight: initial">plain</span></b>')).toContain(
       "plain text inside emphasis",
-    ]);
+    );
     expect(htmlToMarkdownWithLosses('<ol start="0"><li>Zero</li><li>One</li></ol>')).toEqual({
       markdown: "0. Zero\n1. One",
       lost: [],
@@ -498,7 +511,7 @@ describe("what a conversion loses", () => {
           '<ul><li>One</li></ul><blockquote>Quote</blockquote><pre>code</pre><hr>' +
           '<table><tr><td>A</td></tr><tr><td>1</td></tr></table>' +
           '<img src="https://dev.azure.com/contoso/_apis/wit/attachments/1?fileName=x.png" alt="Diagram" width="300">' +
-          '<div style="text-align: left; color: inherit">Plain</div>',
+          '<div style="text-align: left">Plain</div>',
       ),
     ).toEqual([]);
   });
@@ -507,10 +520,10 @@ describe("what a conversion loses", () => {
     expect(lost("<div>10 m<sup>2</sup> of H<sub>2</sub>O</div>")).toEqual(["superscript", "subscript"]);
   });
 
-  it("keeps a code block's own font, and styled emphasis as Markdown", () => {
-    expect(htmlToMarkdownWithLosses('<pre style="font-family: monospace">npm test</pre>')).toEqual({
+  it("names a code block's own font, and keeps styled emphasis as Markdown", () => {
+    expect(htmlToMarkdownWithLosses('<pre style="font-family: serif">npm test</pre>')).toEqual({
       markdown: "```\nnpm test\n```",
-      lost: [],
+      lost: ["font"],
     });
     expect(
       htmlToMarkdownWithLosses(
