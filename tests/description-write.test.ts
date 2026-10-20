@@ -112,8 +112,8 @@ describe("writeDescription", () => {
 
     await writeDescription(connection, {
       sourceId: SOURCE_ID,
-      text: "Goal\n\nNew steps\n- One",
-      expected: "Goal\n\nSteps\n- One",
+      text: "Goal\n\nNew steps\n\n- One",
+      expected: "Goal\n\nSteps\n\n- One",
     });
     expect(patches[0]![1]).toEqual({
       op: "add",
