@@ -427,11 +427,29 @@ describe("what a conversion loses", () => {
     ).toEqual(["other formatting"]);
   });
 
-  it("keeps the spaces at a link's edges as text", () => {
+  it("keeps the spaces at a link's edges inside the link", () => {
     expect(htmlToMarkdownWithLosses('<div><a href="https://e.test">Link </a>after</div>')).toEqual({
-      markdown: "[Link](https://e.test) after",
+      markdown: "[Link ](https://e.test)after",
       lost: [],
     });
+    expect(htmlToMarkdownWithLosses('<div><a href="https://e.test">A&nbsp;&nbsp;</a>X</div>').markdown).toBe(
+      "[A  ](https://e.test)X",
+    );
+  });
+
+  it("names emphasis turned off on code inside emphasis", () => {
+    expect(lost('<b><code style="font-weight: normal">A</code></b>')).toContain("plain text inside emphasis");
+    expect(lost('<i><code style="font-style: normal">A</code></i>')).toContain("plain text inside emphasis");
+  });
+
+  it("reads character references as HTML does, and names what it would read otherwise", () => {
+    expect(htmlToMarkdownWithLosses("<div>&#128; &#x93;quoted&#x94;</div>")).toEqual({
+      markdown: "€ “quoted”",
+      lost: [],
+    });
+    expect(lost("<div>&copy 2026</div>")).toEqual(["characters Ajour cannot read"]);
+    expect(lost("<div>&#0;</div>")).toEqual(["characters Ajour cannot read"]);
+    expect(lost("<div>&#169; &#xA9; &copy;</div>")).toEqual([]);
   });
 
   it("judges a list marker by how deep its list is", () => {

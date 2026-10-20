@@ -407,16 +407,38 @@ function noteListLosses(element: HtmlElement, declarations: Map<string, string>,
   }
 }
 
+/** What HTML reads the numeric references 128 to 159 as: Windows-1252. */
+const WINDOWS_1252 = [
+  0x20ac, 0x81, 0x201a, 0x192, 0x201e, 0x2026, 0x2020, 0x2021, 0x2c6, 0x2030, 0x160, 0x2039, 0x152, 0x8d,
+  0x17d, 0x8f, 0x90, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x2dc, 0x2122, 0x161, 0x203a,
+  0x153, 0x9d, 0x17e, 0x178,
+];
+
+/**
+ * Character references as HTML reads them. A numeric one maps as HTML maps
+ * it; a named one needs its `;` here. Anything HTML would read otherwise,
+ * or as a control character, stays as written and is named as lost.
+ */
 export function decodeHtmlEntities(value: string) {
-  return value.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (entity, token: string) => {
+  return value.replace(/&(#[xX][0-9a-fA-F]+;?|#[0-9]+;?|[a-zA-Z][a-zA-Z0-9]*;?)/g, (entity, token: string) => {
     if (token.startsWith("#")) {
       const hex = token[1] === "x" || token[1] === "X";
-      const codePoint = Number.parseInt(token.slice(hex ? 2 : 1), hex ? 16 : 10);
-      return Number.isFinite(codePoint) && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
+      const digits = token.slice(hex ? 2 : 1).replace(/;$/, "");
+      const codePoint = Number.parseInt(digits, hex ? 16 : 10);
+      if (codePoint >= 0x80 && codePoint <= 0x9f) return String.fromCodePoint(WINDOWS_1252[codePoint - 0x80]!);
+      const control = codePoint < 0x20 && ![0x09, 0x0a, 0x0c, 0x0d].includes(codePoint);
+      if (codePoint === 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff) || control) {
+        lose("characters Ajour cannot read");
+        return entity;
+      }
+      return String.fromCodePoint(codePoint);
     }
-    const named = NAMED_ENTITIES.get(token);
-    if (named !== undefined) return String.fromCodePoint(named);
-    // Shown as written, which the Markdown cannot give back as a character.
+    if (token.endsWith(";")) {
+      const named = NAMED_ENTITIES.get(token.slice(0, -1));
+      if (named !== undefined) return String.fromCodePoint(named);
+    }
+    // Shown as written, or read by HTML without its `;`: the Markdown cannot
+    // give either back as it shows.
     lose("characters Ajour cannot read");
     return entity;
   });
@@ -849,6 +871,7 @@ function noteCodeFormatting(element: HtmlElement) {
 
 function renderCodeBlock(element: HtmlElement): string {
   noteCodeFormatting(element);
+  noteEmphasisResets(element, undefined);
   // Only a newline right after `<pre>` is markup; one inside `<code>` is code.
   const first = element.children[0];
   const all = textContent(element);
@@ -930,6 +953,7 @@ function renderInline(element: HtmlElement): string {
       noteCodeFormatting(element);
       // A code span is one line.
       if (hasBreak(element)) lose("line breaks in code");
+      noteEmphasisResets(element, undefined);
       return renderCodeSpan(textContent(element));
     case "a": {
       // An Azure DevOps mention, as Ajour writes one.
@@ -953,8 +977,8 @@ function renderInline(element: HtmlElement): string {
       if (href === "" && trimSpaces(text).length > 0) lose("other formatting");
       if (!href || trimSpaces(text).length === 0) return text;
       // The spaces at the link's edges stay text beside it.
-      const [, before = "", label = "", after = ""] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text) ?? [];
-      return `${before}[${label}](${encodeUrl(href)})${after}`;
+      // Spaces at its edges stay inside the link, which Markdown link text holds.
+      return `[${text}](${encodeUrl(href)})`;
     }
     case "img": {
       const src = element.attrs.src?.trim();
