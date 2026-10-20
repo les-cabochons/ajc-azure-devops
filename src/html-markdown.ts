@@ -32,10 +32,67 @@ const SELF_CLOSING_SIBLINGS: Record<string, string[]> = {
 };
 
 export function htmlToMarkdown(html: string): string | undefined {
-  const markdown = renderFlow(parseHtml(html))
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return markdown.length > 0 ? markdown : undefined;
+  return htmlToMarkdownWithLosses(html).markdown;
+}
+
+/**
+ * The same conversion, naming what Markdown cannot hold and the conversion
+ * dropped, such as "text colour" (Ajour's ADR 0009). Images never count as
+ * lost: they keep their address, which is all Azure DevOps needs.
+ */
+export function htmlToMarkdownWithLosses(html: string): {
+  markdown: string | undefined;
+  lost: string[];
+} {
+  const previous = losses;
+  losses = new Set();
+  try {
+    const markdown = renderFlow(parseHtml(html))
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    return { markdown: markdown.length > 0 ? markdown : undefined, lost: [...losses] };
+  } finally {
+    losses = previous;
+  }
+}
+
+/** What the conversion under way dropped. */
+let losses: Set<string> | undefined;
+
+function lose(what: string) {
+  losses?.add(what);
+}
+
+const EMPTY_STYLE_VALUES = new Set(["", "inherit", "initial", "unset", "transparent", "none"]);
+
+/** Notes what an element's styling or attributes carry that Markdown cannot. */
+function noteLosses(element: HtmlElement) {
+  const declarations = new Map<string, string>();
+  for (const declaration of (element.attrs.style ?? "").toLowerCase().split(";")) {
+    const colon = declaration.indexOf(":");
+    if (colon > 0) declarations.set(declaration.slice(0, colon).trim(), declaration.slice(colon + 1).trim());
+  }
+  const has = (name: string) => {
+    const value = declarations.get(name);
+    return value !== undefined && !EMPTY_STYLE_VALUES.has(value);
+  };
+  if (has("color") || (element.tag === "font" && element.attrs.color)) lose("text colour");
+  if (has("background-color") || has("background")) lose("highlight");
+  if (has("font-family") || has("font-size") || (element.tag === "font" && (element.attrs.face || element.attrs.size))) {
+    lose("font");
+  }
+  const decoration = declarations.get("text-decoration") ?? declarations.get("text-decoration-line") ?? "";
+  if (element.tag === "u" || element.tag === "ins" || decoration.includes("underline")) lose("underline");
+  const alignment = declarations.get("text-align") ?? element.attrs.align?.toLowerCase() ?? "";
+  if (["center", "right", "justify"].includes(alignment)) lose("text alignment");
+  if (element.tag === "input" && (element.attrs.type ?? "").toLowerCase() === "checkbox") lose("checkboxes");
+  if (["iframe", "video", "audio", "object", "embed"].includes(element.tag)) lose("embedded content");
+  if (
+    (element.tag === "td" || element.tag === "th") &&
+    (Number(element.attrs.colspan ?? 1) > 1 || Number(element.attrs.rowspan ?? 1) > 1)
+  ) {
+    lose("merged table cells");
+  }
 }
 
 export function decodeHtmlEntities(value: string) {
@@ -124,6 +181,7 @@ function parseHtml(html: string): HtmlNode[] {
     }
 
     const element: HtmlElement = { kind: "element", tag, attrs: parseAttributes(token), children: [] };
+    noteLosses(element);
     current().children.push(element);
     if (!VOID_TAGS.has(tag) && !token.endsWith("/>")) {
       stack.push(element);
@@ -274,7 +332,11 @@ function renderTable(table: HtmlElement): string {
         rows.push(
           elementsOf(child.children)
             .filter((cell) => cell.tag === "td" || cell.tag === "th")
-            .map((cell) => singleLine(renderFlow(cell.children))),
+            .map((cell) => {
+              const text = renderFlow(cell.children);
+              if (text.includes("\n")) lose("line breaks in table cells");
+              return singleLine(text);
+            }),
         );
       } else if (child.tag === "thead" || child.tag === "tbody" || child.tag === "tfoot") {
         collectRows(child.children);
@@ -312,6 +374,12 @@ function renderInline(element: HtmlElement): string {
     case "tt":
       return renderCodeSpan(textContent(element));
     case "a": {
+      // An Azure DevOps mention, as Ajour writes one.
+      const mention = /^version:[\d.]+,([0-9a-f-]{36})$/i.exec(element.attrs["data-vss-mention"] ?? "");
+      if (mention) {
+        const name = textContent(element).trim().replace(/^@/, "").replace(/[[\]\\]/g, "");
+        return `[@${name || "someone"}](mention:${mention[1]!.toLowerCase()})`;
+      }
       const text = renderInlineChildren(element.children);
       const href = element.attrs.href?.trim();
       if (!href || text.trim().length === 0) return text;
