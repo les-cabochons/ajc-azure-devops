@@ -1,3 +1,4 @@
+import type {} from "@ajour/plugin-sdk/globals";
 import type {
   AzureDevOpsQueryScope,
   ConnectorImportCandidateInput,
@@ -16,12 +17,19 @@ import {
 } from "./state-categories.js";
 
 export interface AzureDevOpsConnectionInput {
-  id?: string;
+  /** The connection `ajour.http` sends through. */
+  id: string;
   label: string;
   tenantLabel: string;
+  /**
+   * The Organization URL the user saved, which Ajour's broker builds every
+   * request's address from: an organization, or an Azure DevOps Server
+   * collection. Request paths are relative to it.
+   */
   organizationUrl: string;
   project?: string;
-  personalAccessToken: string;
+  /** The connection's access choices that are on, such as `editWorkItems`. */
+  access: readonly string[];
   queryScope: AzureDevOpsQueryScope;
   priorityFieldName?: string;
   /** Which values of the priority field map to each Ajour level. */
@@ -129,9 +137,6 @@ function normalizeOrganizationUrl(value: string) {
   return value.replace(/\/+$/, "");
 }
 
-export function createAuthHeader(personalAccessToken: string) {
-  return `Basic ${Buffer.from(`:${personalAccessToken}`, "utf8").toString("base64")}`;
-}
 
 export function normalizeDisplayValue(value: unknown): string | undefined {
   if (typeof value === "string") {
@@ -272,33 +277,88 @@ WHERE (
 ORDER BY [System.ChangedDate] DESC`;
 }
 
-export async function requestAzureDevOps<T>(
-  config: AzureDevOpsConnectionInput,
-  pathname: string,
-  init?: RequestInit,
-): Promise<T> {
-  const organizationUrl = normalizeOrganizationUrl(config.organizationUrl);
-  const url = `${organizationUrl}${pathname}`;
+/** What `ajour.http` answers. */
+export type AzureResponse = Awaited<ReturnType<typeof ajour.http>>;
 
-  let response: Response;
+export type AzureQuery = Record<string, string | number | boolean>;
+
+export interface AzureRequestInit {
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  /** A derived host the manifest declares, such as `identities`. Absent: the Organization URL. */
+  host?: string;
+  /** The query string, such as `api-version`. The path holds none. */
+  query?: AzureQuery;
+  /** A JSON body, as text. */
+  body?: string;
+  /** The body's type: `application/json` unless set, such as `application/json-patch+json`. */
+  contentType?: string;
+  signal?: AbortSignal;
+}
+
+export const TOKEN_REJECTED =
+  "Azure DevOps rejected the token. Check that it is valid, not expired, and allowed in this organization.";
+
+/**
+ * Whether the answer is how Azure DevOps turns a token away: 401, or a 203
+ * with its sign-in page, or a redirect to sign in. Ajour's broker hands a
+ * redirect to another host back as it is, without following it.
+ */
+export function isRejectedToken(response: Pick<AzureResponse, "status">) {
+  return (
+    response.status === 401 ||
+    response.status === 203 ||
+    (response.status >= 300 && response.status < 400)
+  );
+}
+
+/**
+ * Sends one request through `ajour.http`. Ajour's broker builds the address
+ * from the Organization URL the user saved, or from a derived host, and
+ * attaches the personal access token as Basic credentials: the plugin names
+ * neither. `Accept` goes on every request, and `Content-Type` only with a
+ * body.
+ */
+export async function sendAzureDevOps(
+  config: Pick<AzureDevOpsConnectionInput, "id">,
+  path: string,
+  init: AzureRequestInit = {},
+): Promise<AzureResponse> {
+  const hasBody = init.body !== undefined;
   try {
-    response = await fetch(url, {
-      ...init,
+    return await ajour.http({
+      connectionId: config.id,
+      ...(init.host !== undefined ? { host: init.host } : {}),
+      method: init.method ?? "GET",
+      path,
+      ...(init.query !== undefined ? { query: init.query } : {}),
       headers: {
         Accept: "application/json",
-        Authorization: createAuthHeader(config.personalAccessToken),
-        "Content-Type": "application/json",
-        ...init?.headers,
+        ...(hasBody ? { "Content-Type": init.contentType ?? "application/json" } : {}),
       },
+      ...(hasBody ? { body: init.body } : {}),
+      ...(init.signal !== undefined ? { signal: init.signal } : {}),
     });
   } catch (error) {
     throw new Error(
       `Azure DevOps request failed: ${error instanceof Error ? error.message : "Network error"}`,
     );
   }
+}
+
+export async function requestAzureDevOps<T>(
+  config: Pick<AzureDevOpsConnectionInput, "id">,
+  path: string,
+  init?: AzureRequestInit,
+): Promise<T> {
+  const response = await sendAzureDevOps(config, path, init);
+
+  // A 203 sign-in page or a redirect to sign in is not the answer asked for.
+  if (response.status === 203 || (response.status >= 300 && response.status < 400)) {
+    throw new Error(TOKEN_REJECTED);
+  }
 
   if (!response.ok) {
-    let detail = response.statusText || "Request failed";
+    let detail = "Request failed";
     try {
       const payload = (await response.json()) as { message?: string };
       if (typeof payload.message === "string" && payload.message.trim().length > 0) {
@@ -322,9 +382,10 @@ async function executeWiqlQuery(
 ): Promise<number[]> {
   const response = await requestAzureDevOps<AzureWiqlResponse>(
     config,
-    "/_apis/wit/wiql?$top=200&api-version=7.1",
+    "/_apis/wit/wiql",
     {
       method: "POST",
+      query: { $top: 200, "api-version": "7.1" },
       body: JSON.stringify({ query }),
     },
   );
@@ -374,7 +435,8 @@ export async function resolveAzureFieldMetadata(
   const normalizedLookupValue = normalizeLookupValue(normalizedConfiguredFieldName);
   const response = await requestAzureDevOps<AzureFieldListResponse>(
     config,
-    "/_apis/wit/fields?api-version=7.1",
+    "/_apis/wit/fields",
+    { query: { "api-version": "7.1" } },
   );
   const fields = response.value ?? [];
 
@@ -469,9 +531,10 @@ async function fetchWorkItems(
       const [fieldResponse, relationResponse] = await Promise.all([
         requestAzureDevOps<AzureWorkItemBatchResponse>(
           config,
-          "/_apis/wit/workitemsbatch?api-version=7.1",
+          "/_apis/wit/workitemsbatch",
           {
             method: "POST",
+            query: { "api-version": "7.1" },
             body: JSON.stringify({
               ids: chunk,
               fields: requestedFields,
@@ -481,9 +544,10 @@ async function fetchWorkItems(
         ),
         requestAzureDevOps<AzureWorkItemBatchResponse>(
           config,
-          "/_apis/wit/workitemsbatch?api-version=7.1",
+          "/_apis/wit/workitemsbatch",
           {
             method: "POST",
+            query: { "api-version": "7.1" },
             body: JSON.stringify({
               ids: chunk,
               errorPolicy: "omit",
@@ -521,12 +585,11 @@ export async function updateAzureWorkItemFields(
 
   return await requestAzureDevOps<AzureWorkItem>(
     config,
-    `/_apis/wit/workitems/${encodeURIComponent(workItemId)}?api-version=7.1`,
+    `/_apis/wit/workitems/${encodeURIComponent(workItemId)}`,
     {
       method: "PATCH",
-      headers: {
-        "Content-Type": "application/json-patch+json",
-      },
+      query: { "api-version": "7.1" },
+      contentType: "application/json-patch+json",
       body: JSON.stringify(operations),
     },
   );
@@ -539,7 +602,8 @@ async function fetchWorkItemTypeFieldReferences(
 ) {
   const response = await requestAzureDevOps<AzureFieldListResponse>(
     config,
-    `/${encodeURIComponent(projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(workItemType)}/fields?api-version=7.1`,
+    `/${encodeURIComponent(projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(workItemType)}/fields`,
+    { query: { "api-version": "7.1" } },
   );
 
   if (!Array.isArray(response.value)) {
@@ -642,7 +706,7 @@ function mapWorkItemToCandidate(
 
     return {
       source: "azure_devops",
-      connectionId: config.id ?? "unknown_connection",
+      connectionId: config.id,
       connectionLabel: config.label,
       tenantLabel: config.tenantLabel,
       sourceId: sourceUrl,
@@ -690,7 +754,7 @@ function mapWorkItemToCandidate(
 
   return {
     source: "azure_devops",
-    connectionId: config.id ?? "unknown_connection",
+    connectionId: config.id,
     connectionLabel: config.label,
     tenantLabel: config.tenantLabel,
     sourceId: sourceUrl,
@@ -1154,7 +1218,7 @@ async function findDoneWorkItems(
 
     doneItems.push({
       source: "azure_devops",
-      connectionId: config.id ?? "unknown_connection",
+      connectionId: config.id,
       connectionLabel: config.label,
       tenantLabel: config.tenantLabel,
       sourceId,

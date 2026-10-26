@@ -2,7 +2,14 @@
 
 Ajour Connector - Azure DevOps syncs
 Azure DevOps work items into the local backlog and supports estimate updates
-through Ajour's connector plugin protocol.
+through Ajour's connector plugin protocol. It implements the connector and code
+host capabilities of Ajour's plugin API version 4.
+
+The plugin runs in a sandboxed worker with no network, disk or Node access.
+Every request goes through `ajour.http`, which Ajour's broker sends for it. The
+broker builds the URL from the Organization URL the user saved, or from the
+identities host it derives from it, and attaches the personal access token as
+Basic credentials with an empty user, so the plugin never sees the token.
 
 ## Requirements
 
@@ -32,6 +39,38 @@ Run the complete local CI path with:
 just verify
 ```
 
+`just build` bundles `src/plugin.ts` with esbuild into `dist/plugin.js`, one ES
+module for the browser (`scripts/bundle-options.mjs`). `tsc` only type-checks,
+and without Node types, so `Buffer` or `process` in the source fails the type
+check. The bundle's tests also fail on a Node built-in, `Buffer`, `process`,
+`require`, a global `fetch`, an `Authorization` header or an identities address
+built in the plugin.
+
+## The Ajour SDK
+
+The tests use `createFakeAjour` from `@ajour/plugin-sdk`, which refuses what
+Ajour's broker would: an endpoint, derived host, method or header that
+`plugin.json` does not declare, and an endpoint whose access choice the
+connection left off. The SDK is not on npm yet, so the packed package is
+vendored in `vendor/ajour-plugin-sdk-0.1.0.tgz` and installed as a `file:` dev
+dependency.
+
+It was built from Ajour commit `7bbe9629b830a91b1e2451edb67ca1e5fe704a7c`
+(`packages/plugin-sdk`, version 0.1.0). Refresh it when the plugin contract
+changes:
+
+```sh
+# in an Ajour checkout
+corepack pnpm install --frozen-lockfile
+corepack pnpm --filter @ajour/plugin-sdk build
+cd packages/plugin-sdk && npm pack
+# copy ajour-plugin-sdk-<version>.tgz to vendor/, point package.json at it,
+# run `just install`, and update the commit above
+```
+
+Once the SDK is published, swap the `file:` dependency for a version range and
+delete `vendor/`.
+
 ## Build an installable connector
 
 ```sh
@@ -39,9 +78,9 @@ just package
 ```
 
 The archive is written to
-`package/azure_devops-<version>.ajour-connector`. Its version comes from
-`plugin.json`; keep that value aligned with `package.json` when preparing a new
-release.
+`package/azure_devops-<version>.ajour-connector`. It holds `plugin.json` and
+`dist/` (the bundle) only. Its version comes from `plugin.json`; keep that
+value aligned with `package.json` when preparing a new release.
 
 Every push to `main` runs tests and type checks, stamps a unique prerelease
 version such as `1.0.0-main.3.9aac30e` into the build, packages the installable
@@ -54,13 +93,80 @@ in `plugin.json` and `package.json` on the branch.
 In a production desktop build, open **Settings → Plugins**, choose **Install
 plugin**, and select the generated `.ajour-connector` archive.
 
-The connector requires an Azure DevOps personal access token with the work-item
-permissions appropriate for the enabled read or update operations. Credentials
-stay in Ajour's local connector configuration.
+The connector requires an Azure DevOps personal access token with the scopes
+of the access choices the connection turns on. Ajour keeps the token in its
+vault and never passes it to the plugin.
+
+Until the release that switches every plugin to API 4, Ajour admits an API 4
+package in development builds only.
+
+**Organization URL** is the organization itself, such as
+`https://dev.azure.com/your-org` or `https://your-org.visualstudio.com`, or an
+Azure DevOps Server collection, such as
+`https://ado.contoso.com/tfs/DefaultCollection`. Ajour sends every request
+under the URL as saved and never above its path, so a project's URL under
+`dev.azure.com` or `visualstudio.com` is refused with the organization's URL to
+enter instead. Mark an Azure DevOps Server connection as on-premises when the
+server is on a private network or uses `http`.
+
+### Access
+
+Each connection chooses what it may do. Ajour shows the choices with the token
+scope each needs, refuses an operation whose choice is off before the plugin
+runs, and its broker refuses a request to an endpoint whose choice is off. The
+ids are the ones Ajour gave this plugin on API 3, so a connection keeps its
+choices.
+
+| Choice | Token scope | Unlocks |
+| ------ | ----------- | ------- |
+| Read the backlog (always on) | Work Items (Read) | Sync, WIQL queries and batch reads, comments, descriptions, the item's and the project's people |
+| Edit work items | Work Items (Read & write) | Estimate uploads (`pushEstimates`), settle, description writes, posting, editing and deleting comments, reactions |
+| Pull requests | Code (Read), and Project and Team (Read) for teams | Pull request sync and the other code host operations |
+| Search people across the organisation | Identity (Read) | `@` suggestions from the organization's identities, for a typed query |
+
+A sync on a connection that can't edit work items still reads everything:
+Ajour holds the estimates it would upload for the user to review, so the
+plugin sends no change.
+
+### What the plugin may call
+
+`plugin.json` declares the endpoints below, with the `Accept` and
+`Content-Type` request headers. Ajour shows them in the plugin's Access section,
+and its broker refuses anything else. Paths are under the Organization URL;
+`*` is one segment, such as a project or an id. Query strings, such as
+`api-version`, are not part of a path. The plugin loads when needed
+(`runtime.start`).
+
+| Method | Path | Access |
+| ------ | ---- | ------ |
+| GET | `/_apis/connectionData` | any |
+| POST | `/_apis/wit/wiql`, `/*/_apis/wit/wiql` | Read the backlog |
+| POST | `/_apis/wit/workitemsbatch` | Read the backlog |
+| GET | `/_apis/wit/fields`, `/_apis/wit/workitems/*` | Read the backlog |
+| GET | `/*/_apis/wit/workitemtypes/*/states`, `/*/_apis/wit/workitemtypes/*/fields` | Read the backlog |
+| GET | `/*/_apis/wit/workItems/*/comments`, `/*/_apis/wit/workItems/*/comments/*` | Read the backlog |
+| PATCH | `/_apis/wit/workitems/*` (as `application/json-patch+json`) | Edit work items |
+| POST | `/*/_apis/wit/workItems/*/comments` | Edit work items |
+| PATCH, DELETE | `/*/_apis/wit/workItems/*/comments/*` | Edit work items |
+| PUT, DELETE | `/*/_apis/wit/workItems/*/comments/*/reactions/*` | Edit work items |
+| GET | `/_apis/git/repositories`, `/_apis/git/pullrequests`, `/*/_apis/git/pullrequests`, `/_apis/git/pullrequests/*` | Pull requests |
+| GET | `/*/_apis/git/repositories/*/pullRequests/*/threads`, `.../iterations` | Pull requests |
+| GET | `/*/_apis/policy/evaluations`, `/_apis/teams` | Pull requests |
+| GET | `/_apis/identities` on the `identities` host | Search people across the organisation |
+
+The `identities` host is derived from the Organization URL:
+`vssps.dev.azure.com/{org}` for `dev.azure.com/{org}`,
+`{org}.vssps.visualstudio.com` for `{org}.visualstudio.com`, and the collection
+itself for Azure DevOps Server.
+
+A rejected token answers 401, a 203 with the sign-in page, or a redirect to sign
+in. The broker follows a redirect only within the organization's origin and to
+an endpoint above, and hands any other back as it is without following it, so
+the plugin still tells the user the token was rejected.
 
 ## Settle support
 
-This package uses Ajour plugin API version 3. Its connector capability lists
+Its connector capability lists
 the item's work item type states and can write state and priority in one
 update. Set the connection's priority field to enable priority writes.
 Writing requires work-item read and write permissions.
@@ -202,8 +308,10 @@ later sync. In each batch it reads the items changed since their settle
 first.
 
 Reading comments needs Work Items (Read). Posting, editing, deleting and
-reacting need Work Items (Read & write). People search needs Identity (Read) to search the organization; without it,
-it suggests only the people on the item.
+reacting need Work Items (Read & write) and the connection's **Edit work
+items** choice. Searching the organization needs Identity (Read) and the
+**Search people across the organisation** choice; without them, it suggests
+only the people on the item and in its project.
 Ajour never stores comment text.
 
 ## Pull requests
