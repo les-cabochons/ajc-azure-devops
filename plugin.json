@@ -237,6 +237,7 @@
       "label": "Edit work items",
       "description": "Send estimates, settled and moved work, descriptions and comments.",
       "tokenScope": "Work Items (Read & write)",
+      "always": false,
       "operations": [
         "writeSettle",
         "writeDescription",
@@ -252,6 +253,7 @@
       "label": "Pull requests",
       "description": "Read the pull requests you're involved in, and your teams' review requests.",
       "tokenScope": "Code (Read), and Project and Team (Read) for teams",
+      "always": false,
       "operations": [
         "syncPullRequests",
         "getPullRequestContent",
@@ -272,6 +274,7 @@
       "label": "Search people across the organisation",
       "description": "Suggest anyone in the organisation for @mentions, not only the people on your items.",
       "tokenScope": "Identity (Read)",
+      "always": false,
       "operations": [
         "searchItemPeople"
       ]

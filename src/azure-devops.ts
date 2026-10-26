@@ -632,6 +632,35 @@ function buildSourceUrl(config: AzureDevOpsConnectionInput, workItem: AzureWorkI
   return `${organizationUrl}${projectSegment}/_workitems/edit/${workItem.id}`;
 }
 
+/**
+ * The id Ajour already has for this work item, else the address of the work
+ * item. Ajour keys synced items by source id, and a connection saved under an
+ * older Ajour could name a project in its organization address, which put the
+ * project twice in the id. Correcting the address must not make every item new.
+ */
+function resolveSourceId(
+  config: AzureDevOpsConnectionInput,
+  workItem: AzureWorkItem,
+  localSourceIds: ReadonlyMap<number, string>,
+) {
+  return localSourceIds.get(workItem.id) ?? buildSourceUrl(config, workItem);
+}
+
+/** The ids Ajour already has for this connection's work items, by work item number. */
+function indexLocalSourceIds(
+  config: AzureDevOpsConnectionInput,
+  workItems: readonly ConnectorSyncWorkItem[],
+) {
+  const localSourceIds = new Map<number, string>();
+  for (const workItem of workItems) {
+    const id = parseAzureWorkItemId(workItem.sourceId, config.organizationUrl);
+    if (id !== null && !localSourceIds.has(id)) {
+      localSourceIds.set(id, workItem.sourceId);
+    }
+  }
+  return localSourceIds;
+}
+
 function buildCandidateNote(workItem: AzureWorkItem) {
   const description = normalizeDescriptionValue(
     workItem.fields?.["System.Description"],
@@ -660,6 +689,7 @@ function mapWorkItemToCandidate(
   allItems: Map<number, AzureWorkItem>,
   baseCandidateIds: Set<number>,
   stateInfo: Map<number, AzureStateInfo>,
+  localSourceIds: ReadonlyMap<number, string>,
   fieldReferences?: {
     priorityFieldReferenceName?: string;
     originalEstimateFieldReferenceName?: string;
@@ -697,6 +727,7 @@ function mapWorkItemToCandidate(
   const isBaseCandidate = baseCandidateIds.has(workItem.id);
   const selectable = isBaseCandidate;
   const sourceUrl = buildSourceUrl(config, workItem);
+  const sourceId = resolveSourceId(config, workItem, localSourceIds);
 
   if (isTask(workItemType)) {
     const parentId = getParentId(workItem);
@@ -709,7 +740,7 @@ function mapWorkItemToCandidate(
       connectionId: config.id,
       connectionLabel: config.label,
       tenantLabel: config.tenantLabel,
-      sourceId: sourceUrl,
+      sourceId,
       externalId: String(workItem.id),
       sourceUrl,
       title,
@@ -725,7 +756,8 @@ function mapWorkItemToCandidate(
       originalEstimateHours,
       remainingEstimateHours,
       completedEstimateHours,
-      parentSourceId: hasImportableParent && parent ? buildSourceUrl(config, parent) : undefined,
+      parentSourceId:
+        hasImportableParent && parent ? resolveSourceId(config, parent, localSourceIds) : undefined,
       parentTitle: hasImportableParent ? parentTitle : undefined,
       depth: hasImportableParent ? 1 : 0,
       selectable,
@@ -757,7 +789,7 @@ function mapWorkItemToCandidate(
     connectionId: config.id,
     connectionLabel: config.label,
     tenantLabel: config.tenantLabel,
-    sourceId: sourceUrl,
+    sourceId,
     externalId: String(workItem.id),
     sourceUrl,
     title,
@@ -800,6 +832,7 @@ async function describeWorkItemStates(
 
 async function fetchAzureDevOpsSyncContext(
   config: AzureDevOpsConnectionInput,
+  localSourceIds: ReadonlyMap<number, string> = new Map(),
 ): Promise<AzureDevOpsSyncContext> {
   const resolver = createStateCategoryResolver(config, requestAzureDevOps);
   const priorityField = await resolveAzureFieldMetadata(config, config.priorityFieldName);
@@ -859,6 +892,7 @@ async function fetchAzureDevOpsSyncContext(
       allItems,
       baseCandidateIds,
       stateInfo,
+      localSourceIds,
       {
         priorityFieldReferenceName: priorityField?.resolvedReferenceName,
         originalEstimateFieldReferenceName: originalEstimateField?.resolvedReferenceName,
@@ -1185,10 +1219,9 @@ async function findDoneWorkItems(
   workItems: ConnectorSyncWorkItem[],
 ): Promise<ConnectorImportCandidateInput[]> {
   const localIds = new Map<number, string>();
-  for (const workItem of workItems) {
-    const id = parseAzureWorkItemId(workItem.sourceId, config.organizationUrl);
-    if (id !== null && !syncContext.itemsBySourceId.has(workItem.sourceId)) {
-      localIds.set(id, workItem.sourceId);
+  for (const [id, sourceId] of indexLocalSourceIds(config, workItems)) {
+    if (!syncContext.itemsBySourceId.has(sourceId)) {
+      localIds.set(id, sourceId);
     }
   }
   if (localIds.size === 0) {
@@ -1223,7 +1256,7 @@ async function findDoneWorkItems(
       tenantLabel: config.tenantLabel,
       sourceId,
       externalId: String(id),
-      sourceUrl: sourceId,
+      sourceUrl: buildSourceUrl(config, workItem),
       title: normalizeDisplayValue(workItem.fields?.["System.Title"]) ?? `#${id}`,
       projectName: getProjectName(workItem),
       workItemType:
@@ -1244,7 +1277,10 @@ export async function syncAzureDevOpsConnection(
   config: AzureDevOpsConnectionInput,
   workItems: ConnectorSyncWorkItem[] = [],
 ): Promise<ConnectorPluginSyncResult> {
-  const syncContext = await fetchAzureDevOpsSyncContext(config);
+  const syncContext = await fetchAzureDevOpsSyncContext(
+    config,
+    indexLocalSourceIds(config, workItems),
+  );
   const workItemUpdates = await buildAzureWorkItemUpdates(config, syncContext, workItems);
   // Last, so the sync's earlier requests keep their order.
   const doneItems = await findDoneWorkItems(config, syncContext, workItems);
